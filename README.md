@@ -1,6 +1,17 @@
-# RealtimeVoice – Echtzeit-Sprachkonversation mit KI
+# LLM NPCs – Echtzeit-Sprachkonversation mit KI
 
-**Natürliche Sprachkonversationen mit LLM-gestützten Charakteren in Echtzeit.**
+**Hinweis:** Dieses Projekt ist eine **stark veränderte Version** von [KoljaB/RealtimeVoiceChat](https://github.com/KoljaB/RealtimeVoiceChat).  
+Der technische **Core (Audio-Streaming, STT, TTS, WebSocket-Struktur)** basiert auf diesem Projekt, der Backend-Teil wurde jedoch deutlich erweitert und speziell für **Multi-LLM-NPC-Interaktionen** angepasst.
+
+**Natürliche Sprachkonversationen mit mehreren LLM-gestützten NPCs in Echtzeit.**
+
+Im Gegensatz zum Originalprojekt fokussiert sich diese Variante darauf, **mehrere eigenständige NPC-Charaktere** parallel zu betreiben, die:
+
+- eigene System-Prompts, Wissensstände und Rollen besitzen,
+- in einer gemeinsamen Szene miteinander und mit dem User interagieren können,
+- über den Unity-Client gezielt angesprochen, aktiviert oder kombiniert werden können (z. B. Dialoge zwischen NPCs, Moderation durch den Spieler, Rollenwechsel).
+
+Damit eignet sich dieses Projekt besonders für **VR-/Game-Szenarien**, in denen nicht nur ein einzelner Assistent, sondern ein ganzes **Ensemble von LLM-NPCs** dynamisch und sprachbasiert gesteuert werden soll.
 
 Dieses Projekt ermöglicht es, per Sprache mit KI-Charakteren zu kommunizieren. Die Antworten werden in nahezu Echtzeit als synthetisierte Sprache zurückgegeben. Es besteht aus zwei Hauptkomponenten:
 
