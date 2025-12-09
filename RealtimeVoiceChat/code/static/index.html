@@ -1,0 +1,326 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Real-Time Voice Chat</title>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Inter:400,500,700&display=swap">
+  <style>
+    :root {
+      /* Colors for a serious and neat look */
+      --primary: #2c3e50;               /* Deep slate */
+      --secondary: #e0e0e0;             /* Light gray */
+      --bubble-user: #2c3e50;           /* User message bubble */
+      --bubble-user-text: #ffffff;      /* White text for user bubble */
+      --bubble-assistant: #dcdcdc;      /* Assistant message bubble */
+      --bubble-assistant-text: #333333; /* Dark gray text for assistant bubble */
+      --bg: #f4f4f4;                    /* Very light gray page background */
+      --shadow: 0 2px 8px rgba(0,0,0,0.15);
+    }
+    html, body {
+      height: 100%;
+      margin: 0;
+      padding: 0;
+    }
+    body {
+      font-family: 'Inter', Arial, sans-serif;
+      background: linear-gradient(
+        90deg,
+        #FFD84A 0%,
+        #D9A97C 50%,
+        #B98AEF 100%
+      );
+      background-size: cover;
+      color: #222;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+    }
+    #app {
+      flex: 1;
+      display: flex;
+      justify-content: center;
+      align-items: stretch;
+      min-height: 100vh;
+    }
+    .chat-container {
+      flex: 1;
+      max-width: 480px;
+      width: 100%;
+      background: #fff;
+      box-shadow: var(--shadow);
+      margin: 24px 0;
+      border-radius: 16px;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+    .header {
+      background: var(--primary);
+      color: #fff;
+      padding: 18px 24px;
+      font-size: 1.25rem;
+      letter-spacing: 1px;
+      font-weight: 500;
+      border-top-left-radius: 16px;
+      border-top-right-radius: 16px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .status {
+      font-size: 0.9rem;
+      color: #c0c0c0;
+      margin-left: 12px;
+    }
+    .character-select {
+      margin-left: auto;
+      background: rgba(255,255,255,0.15);
+      color: #fff;
+      border: 1px solid rgba(255,255,255,0.35);
+      border-radius: 8px;
+      padding: 6px 10px;
+      font-size: 0.9rem;
+      font-weight: 500;
+      appearance: none;
+      cursor: pointer;
+      min-width: 160px;
+    }
+    .character-select option {
+      color: #222;
+      background: #fff;
+    }
+    .character-pill {
+      margin-left: 12px;
+      background: rgba(255,255,255,0.1);
+      color: #fff;
+      padding: 4px 10px;
+      border-radius: 999px;
+      font-size: 0.75rem;
+      letter-spacing: 0.5px;
+      text-transform: uppercase;
+    }
+    .messages {
+      flex: 1;
+      padding: 20px 16px 16px 16px;
+      overflow-y: auto;
+      background: var(--bg);
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+    }
+    .bubble {
+      padding: 12px 16px;
+      border-radius: 16px;
+      max-width: 82%;
+      font-size: 1.02rem;
+      line-height: 1.6;
+      position: relative;
+      display: inline-block;
+      word-break: break-word;
+      box-shadow: 0 0.5px 2px rgba(44,62,80,0.1);
+    }
+    .bubble.user {
+      background: var(--bubble-user);
+      color: var(--bubble-user-text);
+      align-self: flex-end;
+      border-bottom-right-radius: 4px;
+      margin-left: auto;
+    }
+    .bubble.assistant {
+      background: var(--bubble-assistant);
+      color: var(--bubble-assistant-text);
+      align-self: flex-start;
+      border-bottom-left-radius: 4px;
+      margin-right: auto;
+    }
+    /* Updated typing bubble to a simpler, lighter color */
+    .bubble.typing {
+      background: #ebedef;
+      color: #444;
+      font-style: italic;
+      opacity: 0.9;
+      animation: pulsebg 1.3s linear infinite;
+      min-width: 60px;
+      border-radius: 16px;
+    }
+    @keyframes pulsebg {
+      0% { opacity: 0.8; }
+      50% { opacity: 1; }
+      100% { opacity: 0.8; }
+    }
+    .input-bar {
+      display: flex;
+      padding: 12px 12px;
+      background: #fff;
+      border-top: 1px solid #e1e5ef;
+      align-items: center;
+      gap: 8px;
+    }
+    .input-bar button {
+      appearance: none;
+      outline: none;
+      border: none;
+      padding: 8px 18px;
+      background: var(--primary);
+      color: #fff;
+      font-size: 1rem;
+      border-radius: 7px;
+      cursor: pointer;
+      font-weight: 500;
+      transition: background 0.2s;
+      margin-left: 4px;
+    }
+    .input-bar button:active {
+      background: #203a4a;
+    }
+    .input-bar button:disabled {
+      background: #a0a0a0;
+      cursor: default;
+    }
+    @media (max-width: 600px) {
+      .chat-container {
+        margin: 0;
+        border-radius: 0;
+        max-width: 100vw;
+      }
+      .header {
+        border-radius: 0;
+      }
+    }
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      padding: 12px 24px;
+      border: none;
+      border-radius: 6px;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, 'Open Sans', 'Helvetica Neue', sans-serif;
+      font-weight: 500;
+      font-size: 16px;
+      cursor: pointer;
+      color: white;
+      transition: all 0.2s ease;
+    }
+
+    .btn svg {
+      margin: 0;
+    }
+
+    .start-btn {
+      background-color: #2a3543;
+    }
+
+    .stop-btn {
+      background-color: #c04949;
+    }
+
+    .reset-btn {
+      background-color: #0d65d0;
+    }
+
+    .btn:hover {
+      opacity: 0.9;
+    }
+
+    .btn:active {
+      transform: scale(0.98);
+    }    
+    .speed-control {
+      flex: 1;
+      margin: 0 16px;
+      max-width: 200px;
+    }
+    #speedSlider {
+      width: 100%;
+      height: 4px;
+      background: #e0e0e0;
+      border-radius: 2px;
+      outline: none;
+      -webkit-appearance: none;
+    }
+    #speedSlider::-webkit-slider-thumb {
+      -webkit-appearance: none;
+      width: 16px;
+      height: 16px;
+      background: #2c3e50;
+      border-radius: 50%;
+      cursor: pointer;
+    }
+    .speed-labels {
+      display: flex;
+      justify-content: space-between;
+      margin-top: 4px;
+      font-size: 0.8rem;
+      color: #666;
+    }
+  </style>
+</head>
+<body>
+  <div id="app">
+    <div class="chat-container">
+      <div class="header">
+        <!-- Centered “AI” text within the circle -->
+        <svg height="24" width="24" viewBox="0 0 22 22" fill="#fff" style="margin-right:8px">
+          <circle cx="11" cy="11" r="12" fill="#222F3D" />
+          <text
+            x="50%"
+            y="50%"
+            fill="#fff"
+            text-anchor="middle"
+            alignment-baseline="middle"
+            font-size="12"
+            font-family="Inter"
+          >AI</text>
+        </svg>
+        Real-Time Voice Chat
+        <select id="characterSelect" class="character-select"></select>
+        <span class="character-pill" id="characterBadge"></span>
+        <span class="status" id="status"></span>
+      </div>
+      <div class="messages" id="messages"></div>
+      <div class="input-bar">
+
+        <div class="speed-control">
+          <input type="range" id="speedSlider" min="0" max="100" value="0">
+          <div class="speed-labels">
+            <span>Fast</span>
+            <span>Slow</span>
+          </div>
+        </div>
+
+        <br>
+
+        <button id="startBtn" title="Start voice chat" class="btn start-btn">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <path d="M8 5L8 19" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+            <path d="M8 5L18 12L8 19" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+        </button>
+        
+        <button id="stopBtn" title="Stop voice chat" class="btn stop-btn">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <rect x="6" y="6" width="12" height="12" rx="1" stroke="currentColor" stroke-width="2"/>
+          </svg>
+        </button>
+        
+        <button id="clearBtn" title="Reset conversation" class="btn reset-btn">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <path d="M21 12C21 16.9706 16.9706 21 12 21C7.02944 21 3 16.9706 3 12C3 7.02944 7.02944 3 12 3C14.8273 3 17.35 4.30367 19 6.34267" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+            <path d="M14.5 6.5L19.5 6.5L19.5 1.5" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+        </button> 
+
+        <button id="copyBtn" title="Copy conversation" class="btn copy-btn">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+           <rect x="9" y="9" width="11" height="11" rx="1" stroke="currentColor" stroke-width="2"/>
+           <path d="M5 15H4C3.44772 15 3 14.5523 3 14V4C3 3.44772 3.44772 3 4 3H14C14.5523 3 15 3.44772 15 4V5" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+         </svg>
+       </button>
+
+      </div>
+    </div>
+  </div>
+  <script src="/static/app.js"></script>
+</body>
+</html>
