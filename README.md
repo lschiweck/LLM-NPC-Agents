@@ -47,9 +47,9 @@ Dieses Projekt ermöglicht es, per Sprache mit KI-Charakteren zu kommunizieren. 
 ┌──────────────────────────────────────────────────────────────────────────────┐
 │                              UNITY CLIENT                                    │
 │  ┌─────────────────┐    ┌──────────────────┐    ┌─────────────────────────┐  │
-│  │ LiveLlmManager  │───▶│ LiveLlmCharacter │───▶│ AudioSource (Playback) │  │
+│  │ LiveLlmManager  │───▶│ LiveLlmCharacter │───▶│ AudioSource (Playback)  │  │
 │  │ (Mikrofon)      │    │ (WebSocket)      │    │                         │  │
-│  └────────┬────────┘    └─────────────────┘     └─────────────────────────┘  │
+│  └────────┬────────┘    └──────────────────┘    └─────────────────────────┘  │
 │           │                      ▲                                           │
 └───────────┼──────────────────────┼───────────────────────────────────────────┘
             │ PCM Audio (48kHz)    │ TTS Chunks (Base64)
@@ -58,7 +58,7 @@ Dieses Projekt ermöglicht es, per Sprache mit KI-Charakteren zu kommunizieren. 
 │                           PYTHON BACKEND                                    │
 │  ┌─────────────┐   ┌──────────────────┐   ┌─────────────────────────────┐   │
 │  │ FastAPI     │   │ AudioInput       │   │ SpeechPipelineManager       │   │
-│  │ WebSocket   │──▶│ Processor        │──▶│                            │   │
+│  │ WebSocket   │──▶│ Processor        │──▶│                             │   │
 │  │ Server      │   │ (RealtimeSTT)    │   │ ┌─────────┐ ┌─────────────┐ │   │
 │  └─────────────┘   └──────────────────┘   │ │ LLM     │ │ TTS         │ │   │
 │                                           │ │ (Ollama)│ │ (Kokoro/    │ │   │
