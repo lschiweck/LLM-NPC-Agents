@@ -254,6 +254,54 @@
       font-size: 0.8rem;
       color: #666;
     }
+    /* Injection Panel Styles */
+    .inject-panel {
+      display: flex;
+      padding: 12px;
+      background: #f8f9fa;
+      border-top: 1px solid #e1e5ef;
+      gap: 8px;
+      align-items: center;
+    }
+    #injectInput {
+      flex: 1;
+      padding: 10px 14px;
+      border: 1px solid #d0d5dd;
+      border-radius: 8px;
+      font-size: 0.95rem;
+      font-family: inherit;
+      outline: none;
+      transition: border-color 0.2s;
+    }
+    #injectInput:focus {
+      border-color: #9b59b6;
+      box-shadow: 0 0 0 3px rgba(155, 89, 182, 0.1);
+    }
+    #injectInput::placeholder {
+      color: #999;
+    }
+    .inject-btn {
+      background: linear-gradient(135deg, #9b59b6, #8e44ad) !important;
+      gap: 6px;
+    }
+    .inject-btn:hover {
+      background: linear-gradient(135deg, #8e44ad, #7d3c98) !important;
+    }
+    /* Injection bubble style */
+    .bubble.injection {
+      background: linear-gradient(135deg, #f3e5f5, #e1bee7);
+      color: #6a1b9a;
+      align-self: center;
+      border-radius: 12px;
+      font-size: 0.9rem;
+      padding: 8px 14px;
+      max-width: 90%;
+      border: 1px dashed #ba68c8;
+      font-style: italic;
+    }
+    .bubble.injection::before {
+      content: "💉 ";
+    }
   </style>
 </head>
 <body>
@@ -318,6 +366,17 @@
          </svg>
        </button>
 
+      </div>
+      
+      <!-- Injection Panel -->
+      <div class="inject-panel">
+        <input type="text" id="injectInput" placeholder="Inject context (e.g., 'The player found the murder weapon')">
+        <button id="injectBtn" title="Inject context" class="btn inject-btn">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <path d="M12 5V19M5 12H19" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+          </svg>
+          Inject
+        </button>
       </div>
     </div>
   </div>

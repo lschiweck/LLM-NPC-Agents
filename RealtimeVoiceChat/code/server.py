@@ -386,6 +386,21 @@ async def process_incoming_data(ws: WebSocket, session: CharacterSession) -> Non
                     if turn_detection:
                         turn_detection.update_settings(speed_factor)
                         logger.info(f"🖥️⚙️ Updated turn detection settings to factor: {speed_factor:.2f}")
+                elif msg_type == "inject":
+                    # Inject context/instruction into the character's system prompt
+                    content = data.get("content", "")
+                    if content and session.pipeline:
+                        injection = session.pipeline.inject(content)
+                        # Send confirmation back to client
+                        if session.message_queue:
+                            await session.message_queue.put({
+                                "type": "inject_confirmed",
+                                "content": content,
+                                "character_id": session.character_id
+                            })
+                        logger.info(f"🖥️💉 Injected into {session.character_id}: {content}")
+                    else:
+                        logger.warning(f"🖥️⚠️ Inject failed: empty content or no pipeline")
 
 
     except asyncio.CancelledError:

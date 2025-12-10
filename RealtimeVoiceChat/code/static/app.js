@@ -19,6 +19,8 @@ const startBtn = document.getElementById("startBtn");
 const stopBtn = document.getElementById("stopBtn");
 const clearBtn = document.getElementById("clearBtn");
 const copyBtn = document.getElementById("copyBtn");
+const injectInput = document.getElementById("injectInput");
+const injectBtn = document.getElementById("injectBtn");
 
 speedSlider.disabled = true;
 startBtn.disabled = true;
@@ -99,7 +101,12 @@ function renderMessages() {
 
   history.forEach((msg) => {
     const bubble = document.createElement("div");
-    bubble.className = `bubble ${msg.role}`;
+    // Handle injection messages with special styling
+    if (msg.type === "injection") {
+      bubble.className = "bubble injection";
+    } else {
+      bubble.className = `bubble ${msg.role}`;
+    }
     bubble.textContent = msg.content;
     messagesDiv.appendChild(bubble);
   });
@@ -286,6 +293,16 @@ function handleJSONMessage(entry, { type, content }) {
       ttsWorkletNode.port.postMessage({ type: "clear" });
     }
     sendJsonMessage({ type: "tts_stop" }, entry.id);
+    return;
+  }
+
+  if (type === "inject_confirmed") {
+    // Add injection to chat history as a special message type
+    if (content?.trim()) {
+      history.push({ role: "system", content: content, type: "injection" });
+    }
+    if (entry.id === activeCharacterId) renderMessages();
+    console.log(`[${entry.id}] Injection confirmed:`, content);
     return;
   }
 
@@ -543,6 +560,31 @@ copyBtn.onclick = () => {
 
 characterSelect.addEventListener("change", (event) => {
   setActiveCharacter(event.target.value);
+});
+
+// Injection functionality
+injectBtn.onclick = () => {
+  const content = injectInput.value.trim();
+  if (!content) {
+    console.log("Inject: empty content, skipping");
+    return;
+  }
+  const entry = getActiveEntry();
+  if (!entry || !entry.isOpen) {
+    console.warn("Inject: no active connection");
+    return;
+  }
+  sendJsonMessage({ type: "inject", content: content }, entry.id);
+  injectInput.value = "";
+  console.log(`[${entry.id}] Sent injection:`, content);
+};
+
+// Allow Enter key to inject
+injectInput.addEventListener("keydown", (e) => {
+  if (e.key === "Enter") {
+    e.preventDefault();
+    injectBtn.click();
+  }
 });
 
 renderMessages();
