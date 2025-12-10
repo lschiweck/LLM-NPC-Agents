@@ -30,6 +30,9 @@ Dieses Projekt ermöglicht es, per Sprache mit KI-Charakteren zu kommunizieren. 
 - [Ollama einrichten](#ollama-einrichten)
 - [Server starten](#server-starten)
 - [Charakter-Konfiguration](#charakter-konfiguration)
+- [🎮 Game Manager LLM](#-game-manager-llm)
+- [💉 System-Prompt-Injection](#-system-prompt-injection)
+- [⚡ Performance: Global Generation Lock](#-performance-global-generation-lock)
 - [Unity-Integration](#unity-integration)
   - [Voraussetzungen](#voraussetzungen)
   - [Skript-Übersicht](#skript-übersicht)
@@ -324,6 +327,137 @@ Charaktere werden in `RealtimeVoiceChat/code/character_config.json` definiert:
 
 ---
 
+## 🎮 Game Manager LLM
+
+Der Game Manager ist ein KI-"Spielleiter", der im Hintergrund läuft und die Story orchestriert.
+
+### Features
+
+- **Periodische Analyse**: Läuft alle X Sekunden (konfigurierbar, Standard: 30s)
+- **Konversations-Zugriff**: Hat Zugriff auf alle NPC-Gesprächsverläufe
+- **Dynamische Injektionen**: Kann Instruktionen in beliebige Charaktere injizieren
+- **Game Clues**: Akzeptiert Hinweise vom Spiel (z.B. "Spieler hat Beweis gefunden")
+- **Web-UI Panel**: Echtzeit-Status, Timer und Steuerung
+
+### Konfiguration (`game_manager_config.json`)
+
+```json
+{
+  "enabled": true,
+  "tick_interval_seconds": 30,
+  "llm_provider": "ollama",
+  "llm_model": "llama3",
+  "story_context": "Dies ist ein interaktiver Krimi. Der Spieler ist ein Detektiv.",
+  "known_characters": ["LisaParker", "PaulAdams"],
+  "system_prompt": "Du bist der unsichtbare Spielleiter eines interaktiven Krimis..."
+}
+```
+
+### Konfigurations-Optionen
+
+| Feld | Beschreibung | Standard |
+|------|--------------|----------|
+| `enabled` | Game Manager aktivieren/deaktivieren | `true` |
+| `tick_interval_seconds` | Zeit zwischen Analyse-Zyklen | `30` |
+| `llm_provider` | LLM-Backend für GM | `"ollama"` |
+| `llm_model` | Modell für GM | `"llama3"` |
+| `story_context` | Hintergrund-Story-Info | `""` |
+| `known_characters` | Liste der Character-IDs | `[]` |
+| `system_prompt` | Instruktionen für den GM | `"..."` |
+
+### Funktionsweise
+
+1. **Alle X Sekunden** führt der Game Manager aus:
+   - Sammelt alle NPC-Gesprächsverläufe
+   - Prüft auf neue Game Clues
+   - Analysiert die Situation
+   - Entscheidet ob Charaktere neue Instruktionen brauchen
+
+2. **Ausgabe-Format**:
+   ```
+   THINKING: [Analyse der Situation]
+   ACTION: INJECT LisaParker: Werde nervöser wenn die Mordwaffe erwähnt wird.
+   ```
+
+3. **Injektionen** werden dem Character's System-Prompt hinzugefügt:
+   ```
+   [GAME]: Werde nervöser wenn die Mordwaffe erwähnt wird.
+   ```
+
+### Web-UI
+
+Das Game Manager Panel im Web-Interface zeigt:
+- **Status**: Active / Processing / Disabled
+- **Timer**: Countdown bis zum nächsten Tick
+- **Trigger-Button**: Manuellen Tick auslösen
+- **Game Clues**: Hinweise eingeben die der GM berücksichtigt
+- **Last Thinking**: Letzte Analyse des GM
+- **Last Actions**: Letzte Injektionen
+- **History**: Verlauf aller Entscheidungen
+
+---
+
+## 💉 System-Prompt-Injection
+
+Injiziere Kontext oder Instruktionen in Charaktere während des Spiels.
+
+### Zwei Methoden
+
+#### 1. Direkte Character-Injection (Web-UI)
+
+Nutze das Inject-Feld unten im Chat um direkt in den aktuell ausgewählten Charakter zu injizieren.
+
+**Beispiel**: "Der Spieler hat gerade eine blutige Waffe in der Küche gefunden."
+
+#### 2. Game Manager Clues (Web-UI)
+
+Füge Hinweise im Game Manager Panel hinzu. Der Game Manager analysiert diese und entscheidet selbst, welche Charaktere welche Instruktionen bekommen.
+
+**Beispiel**: "Spieler hat Alibi von Paul überprüft - es stimmt nicht"
+
+### Programmatische Injection
+
+Via WebSocket-Nachricht an einen Character:
+```json
+{
+  "type": "inject",
+  "content": "Der Spieler hat gerade eine blutige Waffe gefunden."
+}
+```
+
+Via WebSocket an Game Manager:
+```json
+{
+  "type": "inject_clue",
+  "content": "Spieler hat Beweisstück #3 gefunden"
+}
+```
+
+### Injection im System-Prompt
+
+Injektionen werden dem System-Prompt des Charakters hinzugefügt:
+
+```
+[Originaler System-Prompt]
+
+[GAME]: Der Spieler hat gerade eine blutige Waffe gefunden.
+[GAME]: Werde nervöser bei Fragen zum Tatort.
+```
+
+---
+
+## ⚡ Performance: Global Generation Lock
+
+Bei mehreren "warmen" NPC-Sessions verhindert ein globaler Lock, dass LLM+TTS gleichzeitig für mehrere Charaktere laufen. Dies:
+
+- **Verhindert GPU-Überlastung** bei mehreren parallelen Generierungen
+- **Ermöglicht sofortiges Wechseln** zwischen NPCs (< 1 Sekunde)
+- **Serialisiert** schwere Compute-Tasks automatisch
+
+Der Lock wird transparent verwaltet - aus Spieler-Sicht fühlt es sich an wie sofortiges Umschalten zwischen NPCs.
+
+---
+
 ## Unity-Integration
 
 ### Voraussetzungen
@@ -587,16 +721,18 @@ RealtimeVoice/
 │   ├── code/
 │   │   ├── server.py                  # FastAPI WebSocket Server
 │   │   ├── speech_pipeline_manager.py # LLM + TTS Orchestrierung
+│   │   ├── game_manager.py            # 🎮 Game Manager LLM (NEU)
 │   │   ├── audio_in.py                # Audio-Eingabe-Verarbeitung
 │   │   ├── audio_module.py            # TTS-Engine-Abstraktion
 │   │   ├── llm_module.py              # LLM-Backend-Abstraktion
 │   │   ├── transcribe.py              # STT-Konfiguration
 │   │   ├── turndetect.py              # Sprechpausen-Erkennung
 │   │   ├── character_config.json      # Charakter-Definitionen
+│   │   ├── game_manager_config.json   # 🎮 Game Manager Config (NEU)
 │   │   ├── system_prompt.txt          # Standard-System-Prompt
 │   │   └── static/                    # Web-Interface
-│   │       ├── index.html
-│   │       ├── app.js
+│   │       ├── index.html             # UI mit Game Manager Panel
+│   │       ├── app.js                 # Client-Logik + GM Integration
 │   │       └── ...
 │   │
 │   ├── requirements.txt               # Python-Abhängigkeiten
