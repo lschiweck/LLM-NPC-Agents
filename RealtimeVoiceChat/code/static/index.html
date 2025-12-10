@@ -254,6 +254,336 @@
       font-size: 0.8rem;
       color: #666;
     }
+    /* Injection Panel Styles */
+    .inject-panel {
+      display: flex;
+      padding: 12px;
+      background: #f8f9fa;
+      border-top: 1px solid #e1e5ef;
+      gap: 8px;
+      align-items: center;
+    }
+    #injectInput {
+      flex: 1;
+      padding: 10px 14px;
+      border: 1px solid #d0d5dd;
+      border-radius: 8px;
+      font-size: 0.95rem;
+      font-family: inherit;
+      outline: none;
+      transition: border-color 0.2s;
+    }
+    #injectInput:focus {
+      border-color: #9b59b6;
+      box-shadow: 0 0 0 3px rgba(155, 89, 182, 0.1);
+    }
+    #injectInput::placeholder {
+      color: #999;
+    }
+    .inject-btn {
+      background: linear-gradient(135deg, #9b59b6, #8e44ad) !important;
+      gap: 6px;
+    }
+    .inject-btn:hover {
+      background: linear-gradient(135deg, #8e44ad, #7d3c98) !important;
+    }
+    /* Injection bubble style */
+    .bubble.injection {
+      background: linear-gradient(135deg, #f3e5f5, #e1bee7);
+      color: #6a1b9a;
+      align-self: center;
+      border-radius: 12px;
+      font-size: 0.9rem;
+      padding: 8px 14px;
+      max-width: 90%;
+      border: 1px dashed #ba68c8;
+      font-style: italic;
+    }
+    .bubble.injection::before {
+      content: "💉 ";
+    }
+    
+    /* Game Manager Panel Styles */
+    .gm-panel {
+      width: 320px;
+      background: #1a1a2e;
+      border-radius: 16px;
+      margin: 24px 0 24px 16px;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+      box-shadow: 0 4px 20px rgba(0,0,0,0.3);
+      position: relative;
+    }
+    .gm-header {
+      background: linear-gradient(135deg, #16213e, #1a1a2e);
+      padding: 16px 20px;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      border-bottom: 1px solid #2d2d44;
+    }
+    .gm-icon {
+      font-size: 1.4rem;
+    }
+    .gm-title {
+      color: #fff;
+      font-weight: 600;
+      font-size: 1rem;
+      letter-spacing: 0.5px;
+    }
+    .gm-status {
+      margin-left: auto;
+      font-size: 0.8rem;
+      padding: 4px 10px;
+      border-radius: 12px;
+      background: rgba(255,255,255,0.1);
+    }
+    .gm-status.active {
+      color: #4ade80;
+    }
+    .gm-status.disabled {
+      color: #f87171;
+    }
+    .gm-status.processing {
+      color: #fbbf24;
+      animation: pulse 1s infinite;
+    }
+    @keyframes pulse {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.5; }
+    }
+    .gm-content {
+      flex: 1;
+      padding: 16px;
+      overflow-y: auto;
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+    }
+    .gm-timer-section {
+      background: linear-gradient(135deg, #2d2d44, #1a1a2e);
+      border-radius: 12px;
+      padding: 16px;
+      text-align: center;
+    }
+    .gm-timer-label {
+      color: #888;
+      font-size: 0.75rem;
+      text-transform: uppercase;
+      letter-spacing: 1px;
+      margin-bottom: 8px;
+    }
+    .gm-timer {
+      color: #fff;
+      font-size: 2.5rem;
+      font-weight: 700;
+      font-family: 'SF Mono', 'Consolas', monospace;
+    }
+    .gm-trigger-btn {
+      margin-top: 12px;
+      background: linear-gradient(135deg, #6366f1, #8b5cf6);
+      color: #fff;
+      border: none;
+      padding: 8px 16px;
+      border-radius: 8px;
+      cursor: pointer;
+      font-size: 0.85rem;
+      font-weight: 500;
+      transition: transform 0.1s, opacity 0.2s;
+    }
+    .gm-trigger-btn:hover {
+      opacity: 0.9;
+    }
+    .gm-trigger-btn:active {
+      transform: scale(0.97);
+    }
+    .gm-inject-section {
+      background: rgba(255,255,255,0.05);
+      border-radius: 10px;
+      padding: 12px;
+      border: 1px dashed rgba(99, 102, 241, 0.3);
+    }
+    .gm-inject-row {
+      display: flex;
+      gap: 8px;
+      margin-top: 8px;
+    }
+    .gm-inject-input {
+      flex: 1;
+      background: rgba(0,0,0,0.3);
+      border: 1px solid rgba(255,255,255,0.15);
+      border-radius: 6px;
+      padding: 8px 10px;
+      color: #fff;
+      font-size: 0.85rem;
+    }
+    .gm-inject-input::placeholder {
+      color: rgba(255,255,255,0.4);
+    }
+    .gm-inject-btn {
+      background: linear-gradient(135deg, #10b981, #059669);
+      color: #fff;
+      border: none;
+      padding: 8px 14px;
+      border-radius: 6px;
+      cursor: pointer;
+      font-size: 0.8rem;
+      font-weight: 500;
+      white-space: nowrap;
+    }
+    .gm-inject-btn:hover {
+      opacity: 0.9;
+    }
+    .gm-clues {
+      margin-top: 10px;
+      font-size: 0.8rem;
+      color: #aaa;
+      max-height: 80px;
+      overflow-y: auto;
+    }
+    .gm-clue-item {
+      background: rgba(16, 185, 129, 0.15);
+      border-left: 2px solid #10b981;
+      padding: 6px 10px;
+      margin-bottom: 6px;
+      border-radius: 0 6px 6px 0;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    .gm-clue-text {
+      color: #d1fae5;
+      flex: 1;
+    }
+    .gm-clue-remove {
+      background: none;
+      border: none;
+      color: #ef4444;
+      cursor: pointer;
+      font-size: 0.9rem;
+      padding: 2px 6px;
+      opacity: 0.6;
+    }
+    .gm-clue-remove:hover {
+      opacity: 1;
+    }
+    .gm-section {
+      background: rgba(255,255,255,0.03);
+      border-radius: 10px;
+      padding: 12px;
+    }
+    .gm-section-title {
+      color: #888;
+      font-size: 0.7rem;
+      text-transform: uppercase;
+      letter-spacing: 1px;
+      margin-bottom: 8px;
+      padding-bottom: 6px;
+      border-bottom: 1px solid rgba(255,255,255,0.1);
+    }
+    .gm-thinking {
+      color: #e0e0e0;
+      font-size: 0.9rem;
+      line-height: 1.5;
+      max-height: 100px;
+      overflow-y: auto;
+    }
+    .gm-thinking em {
+      color: #666;
+    }
+    .gm-actions {
+      color: #e0e0e0;
+      font-size: 0.85rem;
+    }
+    .gm-actions em {
+      color: #666;
+    }
+    .gm-action-item {
+      background: rgba(139, 92, 246, 0.2);
+      border-left: 3px solid #8b5cf6;
+      padding: 8px 10px;
+      margin-bottom: 8px;
+      border-radius: 0 6px 6px 0;
+    }
+    .gm-action-target {
+      color: #a78bfa;
+      font-weight: 600;
+      font-size: 0.8rem;
+    }
+    .gm-action-text {
+      color: #d4d4d8;
+      font-size: 0.85rem;
+      margin-top: 4px;
+    }
+    .gm-history {
+      color: #888;
+      font-size: 0.8rem;
+      max-height: 150px;
+      overflow-y: auto;
+    }
+    .gm-history em {
+      color: #555;
+    }
+    .gm-history-item {
+      padding: 6px 0;
+      border-bottom: 1px solid rgba(255,255,255,0.05);
+    }
+    .gm-history-time {
+      color: #666;
+      font-size: 0.7rem;
+    }
+    .gm-history-summary {
+      color: #a0a0a0;
+    }
+    .gm-disabled-overlay {
+      position: absolute;
+      top: 0;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      background: rgba(0,0,0,0.7);
+      display: none;
+      align-items: center;
+      justify-content: center;
+      backdrop-filter: blur(4px);
+      border-radius: 16px;
+    }
+    .gm-disabled-overlay.visible {
+      display: flex;
+    }
+    .gm-disabled-message {
+      text-align: center;
+      color: #888;
+    }
+    .gm-disabled-message span {
+      display: block;
+      font-size: 1.1rem;
+      font-weight: 600;
+      color: #aaa;
+      margin-bottom: 8px;
+    }
+    .gm-disabled-message small {
+      font-size: 0.8rem;
+      color: #666;
+    }
+    
+    /* Responsive: Stack panels on small screens */
+    @media (max-width: 900px) {
+      #app {
+        flex-direction: column;
+        align-items: center;
+      }
+      .gm-panel {
+        width: 100%;
+        max-width: 480px;
+        margin: 0 0 24px 0;
+        order: 2;
+      }
+      .chat-container {
+        order: 1;
+      }
+    }
   </style>
 </head>
 <body>
@@ -318,6 +648,73 @@
          </svg>
        </button>
 
+      </div>
+      
+      <!-- Injection Panel -->
+      <div class="inject-panel">
+        <input type="text" id="injectInput" placeholder="Inject context (e.g., 'The player found the murder weapon')">
+        <button id="injectBtn" title="Inject context" class="btn inject-btn">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <path d="M12 5V19M5 12H19" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+          </svg>
+          Inject
+        </button>
+      </div>
+    </div>
+    
+    <!-- Game Manager Panel -->
+    <div class="gm-panel" id="gmPanel">
+      <div class="gm-header">
+        <span class="gm-icon">🎮</span>
+        <span class="gm-title">Game Manager</span>
+        <span class="gm-status" id="gmStatus">● Connecting...</span>
+      </div>
+      
+      <div class="gm-content" id="gmContent">
+        <div class="gm-timer-section">
+          <div class="gm-timer-label">Next Tick</div>
+          <div class="gm-timer" id="gmTimer">--</div>
+          <button class="gm-trigger-btn" id="gmTriggerBtn" title="Trigger now">⚡ Trigger</button>
+        </div>
+        
+        <div class="gm-inject-section">
+          <div class="gm-section-title">💡 Game Clue</div>
+          <div class="gm-inject-row">
+            <input type="text" id="gmInjectInput" class="gm-inject-input" placeholder="e.g. 'Player found the murder weapon'" />
+            <button id="gmInjectBtn" class="gm-inject-btn">+ Add</button>
+          </div>
+          <div class="gm-clues" id="gmClues">
+            <em>No active clues</em>
+          </div>
+        </div>
+        
+        <div class="gm-section">
+          <div class="gm-section-title">Last Thinking</div>
+          <div class="gm-thinking" id="gmThinking">
+            <em>Waiting for first tick...</em>
+          </div>
+        </div>
+        
+        <div class="gm-section">
+          <div class="gm-section-title">Last Actions</div>
+          <div class="gm-actions" id="gmActions">
+            <em>No actions yet</em>
+          </div>
+        </div>
+        
+        <div class="gm-section">
+          <div class="gm-section-title">History</div>
+          <div class="gm-history" id="gmHistory">
+            <em>No history</em>
+          </div>
+        </div>
+      </div>
+      
+      <div class="gm-disabled-overlay" id="gmDisabledOverlay">
+        <div class="gm-disabled-message">
+          <span>Game Manager Disabled</span>
+          <small>Enable in game_manager_config.json</small>
+        </div>
       </div>
     </div>
   </div>
