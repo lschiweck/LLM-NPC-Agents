@@ -1101,6 +1101,28 @@ class SpeechPipelineManager:
         self.history = []
         logger.info("🗣️🧹 History cleared. Reset complete.")
 
+    def inject(self, content: str) -> str:
+        """
+        Injects context or instruction into the character's system prompt.
+        
+        The injected content is appended to the system prompt and will be
+        considered for all future LLM generations in this session.
+        
+        Args:
+            content: The context or instruction to inject.
+            
+        Returns:
+            The formatted injection string that was added.
+        """
+        injection = f"\n\n[GAME]: {content}"
+        self.system_prompt += injection
+        # Also update the LLM's system prompt
+        if self.llm:
+            self.llm.system_prompt = self.system_prompt
+            self.llm.system_prompt_message = {"role": "system", "content": self.system_prompt}
+        logger.info(f"🗣️💉 Injected context: {content}")
+        return injection
+
     def shutdown(self):
         """
         Initiates a graceful shutdown of the pipeline manager and worker threads.

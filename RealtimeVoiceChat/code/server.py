@@ -105,6 +105,7 @@ if sys.platform == "win32":
 #from audio_out import AudioOutProcessor
 from audio_in import AudioInputProcessor
 from speech_pipeline_manager import SpeechPipelineManager
+from game_manager import GameManager
 import uvicorn
 import asyncio
 import struct
@@ -189,10 +190,88 @@ async def lifespan(app: FastAPI):
     app.state.CharacterSessions: Dict[str, CharacterSession] = {}
     app.state.CharacterConfig = load_character_config()
     app.state.Aborting = False # Keep this? Its usage isn't clear in the provided snippet. Minimizing changes.
+    
+    # Initialize Game Manager - Step by step to find the bug
+    app.state.GameManagerClients: List[WebSocket] = []
+    
+    # Step 1: Just create the GameManager object
+    try:
+        app.state.GameManager = GameManager()
+        logger.info("🎮 Step 1: GameManager created OK")
+    except Exception as e:
+        logger.error(f"🎮💥 Step 1 FAILED: {e}")
+        app.state.GameManager = None
+    
+    # Step 2: Set up callbacks (but don't start the loop yet)
+    if app.state.GameManager:
+        def get_character_histories() -> Dict[str, List[Dict]]:
+            histories = {}
+            sessions: Dict[str, CharacterSession] = app.state.CharacterSessions
+            for char_id, session in sessions.items():
+                if session.pipeline:
+                    histories[char_id] = list(session.pipeline.history)
+                else:
+                    histories[char_id] = []
+            return histories
+        
+        def on_gm_inject(target: str, instruction: str):
+            sessions: Dict[str, CharacterSession] = app.state.CharacterSessions
+            session = sessions.get(target)
+            if session and session.pipeline:
+                session.pipeline.inject(instruction)
+                if session.message_queue:
+                    asyncio.create_task(session.message_queue.put({
+                        "type": "inject_confirmed",
+                        "content": instruction,
+                        "character_id": target,
+                        "source": "GameManager"
+                    }))
+                logger.info(f"🎮💉 Game Manager injected into {target}")
+            else:
+                logger.warning(f"🎮⚠️ Cannot inject into {target}: session not found or no pipeline")
+        
+        app.state.GameManager.get_character_histories = get_character_histories
+        app.state.GameManager.on_inject = on_gm_inject
+        # Broadcast callback
+        async def broadcast_gm_state(state: Dict):
+            clients = app.state.GameManagerClients
+            if not clients:
+                return
+            message = json.dumps({"type": "game_manager_state", **state})
+            disconnected = []
+            for client_ws in clients:
+                try:
+                    await client_ws.send_text(message)
+                except Exception:
+                    disconnected.append(client_ws)
+            for client_ws in disconnected:
+                if client_ws in clients:
+                    clients.remove(client_ws)
+        
+        # Use a sync wrapper that creates a task for the async broadcast
+        def sync_broadcast_wrapper(state: Dict):
+            try:
+                asyncio.create_task(broadcast_gm_state(state))
+            except RuntimeError:
+                # No event loop running yet - ignore
+                pass
+        
+        app.state.GameManager.on_state_update = sync_broadcast_wrapper
+        logger.info("🎮 Step 2: Callbacks set OK")
+        
+        # Start Game Manager loop - uses asyncio.create_task internally
+        if app.state.GameManager.state.enabled:
+            app.state.GameManager.start()
+            logger.info("🎮 Step 3: Game Manager loop started")
 
     yield
 
     logger.info("🖥️⏹️ Server shutting down")
+    
+    # Stop Game Manager (if enabled)
+    # if app.state.GameManager:
+    #     app.state.GameManager.stop()
+    
     sessions: Dict[str, CharacterSession] = getattr(app.state, "CharacterSessions", {})
     for session in sessions.values():
         session.shutdown()
@@ -247,6 +326,70 @@ async def list_characters():
         }
         for cid, config in app.state.CharacterConfig.items()
     ]
+
+@app.get("/game_manager/status")
+async def game_manager_status():
+    """Get current Game Manager status."""
+    gm: GameManager = app.state.GameManager
+    return gm.get_state_for_ui()
+
+@app.post("/game_manager/trigger")
+async def game_manager_trigger():
+    """Manually trigger a Game Manager tick."""
+    gm: GameManager = app.state.GameManager
+    if not gm.state.enabled:
+        return {"error": "Game Manager is disabled"}
+    gm.trigger_tick_now()
+    return {"status": "triggered"}
+
+@app.post("/game_manager/reload")
+async def game_manager_reload():
+    """Reload Game Manager configuration."""
+    gm: GameManager = app.state.GameManager
+    gm.reload_config()
+    if gm.state.enabled and (gm._task is None or gm._task.done()):
+        gm.start()
+    return {"status": "reloaded", "enabled": gm.state.enabled}
+
+@app.websocket("/ws/game_manager")
+async def game_manager_websocket(ws: WebSocket):
+    """WebSocket endpoint for Game Manager UI updates."""
+    await ws.accept()
+    app.state.GameManagerClients.append(ws)
+    logger.info("🎮🔌 Game Manager client connected")
+    
+    # Send initial state
+    gm: GameManager = app.state.GameManager
+    if gm:
+        await ws.send_json({"type": "game_manager_state", **gm.get_state_for_ui()})
+    else:
+        await ws.send_json({"type": "game_manager_state", "enabled": False})
+    
+    try:
+        while True:
+            data = await ws.receive_json()
+            msg_type = data.get("type")
+            
+            if msg_type == "trigger" and gm:
+                gm.trigger_tick_now()
+            elif msg_type == "reload" and gm:
+                gm.reload_config()
+                await ws.send_json({"type": "game_manager_state", **gm.get_state_for_ui()})
+            elif msg_type == "inject_clue" and gm:
+                content = data.get("content", "").strip()
+                if content:
+                    gm.inject_clue(content)
+                    await ws.send_json({"type": "game_manager_state", **gm.get_state_for_ui()})
+            elif msg_type == "remove_clue" and gm:
+                index = data.get("index")
+                if index is not None:
+                    gm.remove_clue(index)
+                    await ws.send_json({"type": "game_manager_state", **gm.get_state_for_ui()})
+    except Exception as e:
+        logger.info(f"🎮🔌 Game Manager client disconnected: {e}")
+    finally:
+        if ws in app.state.GameManagerClients:
+            app.state.GameManagerClients.remove(ws)
 
 # --------------------------------------------------------------------
 # Utility functions
@@ -386,6 +529,21 @@ async def process_incoming_data(ws: WebSocket, session: CharacterSession) -> Non
                     if turn_detection:
                         turn_detection.update_settings(speed_factor)
                         logger.info(f"🖥️⚙️ Updated turn detection settings to factor: {speed_factor:.2f}")
+                elif msg_type == "inject":
+                    # Inject context/instruction into the character's system prompt
+                    content = data.get("content", "")
+                    if content and session.pipeline:
+                        injection = session.pipeline.inject(content)
+                        # Send confirmation back to client
+                        if session.message_queue:
+                            await session.message_queue.put({
+                                "type": "inject_confirmed",
+                                "content": content,
+                                "character_id": session.character_id
+                            })
+                        logger.info(f"🖥️💉 Injected into {session.character_id}: {content}")
+                    else:
+                        logger.warning(f"🖥️⚠️ Inject failed: empty content or no pipeline")
 
 
     except asyncio.CancelledError:
@@ -984,6 +1142,7 @@ async def websocket_endpoint(ws: WebSocket):
     Args:
         ws: The WebSocket connection instance provided by FastAPI.
     """
+    logger.info("🖥️🔌 WebSocket /ws endpoint hit, accepting...")
     await ws.accept()
     logger.info("🖥️✅ Client connected via WebSocket.")
 

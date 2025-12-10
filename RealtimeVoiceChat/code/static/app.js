@@ -19,6 +19,22 @@ const startBtn = document.getElementById("startBtn");
 const stopBtn = document.getElementById("stopBtn");
 const clearBtn = document.getElementById("clearBtn");
 const copyBtn = document.getElementById("copyBtn");
+const injectInput = document.getElementById("injectInput");
+const injectBtn = document.getElementById("injectBtn");
+
+// Game Manager UI elements
+const gmPanel = document.getElementById("gmPanel");
+const gmStatus = document.getElementById("gmStatus");
+const gmTimer = document.getElementById("gmTimer");
+const gmTriggerBtn = document.getElementById("gmTriggerBtn");
+const gmThinking = document.getElementById("gmThinking");
+const gmActions = document.getElementById("gmActions");
+const gmHistory = document.getElementById("gmHistory");
+const gmDisabledOverlay = document.getElementById("gmDisabledOverlay");
+const gmContent = document.getElementById("gmContent");
+const gmInjectInput = document.getElementById("gmInjectInput");
+const gmInjectBtn = document.getElementById("gmInjectBtn");
+const gmClues = document.getElementById("gmClues");
 
 speedSlider.disabled = true;
 startBtn.disabled = true;
@@ -99,7 +115,12 @@ function renderMessages() {
 
   history.forEach((msg) => {
     const bubble = document.createElement("div");
-    bubble.className = `bubble ${msg.role}`;
+    // Handle injection messages with special styling
+    if (msg.type === "injection") {
+      bubble.className = "bubble injection";
+    } else {
+      bubble.className = `bubble ${msg.role}`;
+    }
     bubble.textContent = msg.content;
     messagesDiv.appendChild(bubble);
   });
@@ -130,18 +151,22 @@ function escapeHtml(str) {
 }
 
 async function initCharacters() {
+  console.log("[initCharacters] Starting...");
   updateStatus("Loading characters...");
   try {
     const resp = await fetch("/characters");
+    console.log("[initCharacters] Fetch response:", resp.status);
     const data = await resp.json();
+    console.log("[initCharacters] Characters data:", data);
     if (Array.isArray(data) && data.length > 0) {
       availableCharacters = data.map((entry) => ({
         id: entry.id,
         name: entry.name || entry.id,
       }));
+      console.log("[initCharacters] Parsed characters:", availableCharacters);
     }
   } catch (err) {
-    console.error("Failed to fetch character list", err);
+    console.error("[initCharacters] Failed to fetch character list", err);
   }
 
   if (!Array.isArray(availableCharacters) || availableCharacters.length === 0) {
@@ -181,8 +206,10 @@ async function initCharacters() {
 }
 
 function openSocket(entry) {
+  console.log(`[openSocket] Opening socket for ${entry.id}...`);
   const wsProto = window.location.protocol === "https:" ? "wss:" : "ws:";
   const url = `${wsProto}//${location.host}/ws?characterId=${encodeURIComponent(entry.id)}`;
+  console.log(`[openSocket] URL: ${url}`);
   const ws = new WebSocket(url);
   entry.ws = ws;
 
@@ -286,6 +313,16 @@ function handleJSONMessage(entry, { type, content }) {
       ttsWorkletNode.port.postMessage({ type: "clear" });
     }
     sendJsonMessage({ type: "tts_stop" }, entry.id);
+    return;
+  }
+
+  if (type === "inject_confirmed") {
+    // Add injection to chat history as a special message type
+    if (content?.trim()) {
+      history.push({ role: "system", content: content, type: "injection" });
+    }
+    if (entry.id === activeCharacterId) renderMessages();
+    console.log(`[${entry.id}] Injection confirmed:`, content);
     return;
   }
 
@@ -545,5 +582,218 @@ characterSelect.addEventListener("change", (event) => {
   setActiveCharacter(event.target.value);
 });
 
+// Injection functionality
+injectBtn.onclick = () => {
+  const content = injectInput.value.trim();
+  if (!content) {
+    console.log("Inject: empty content, skipping");
+    return;
+  }
+  const entry = getActiveEntry();
+  if (!entry || !entry.isOpen) {
+    console.warn("Inject: no active connection");
+    return;
+  }
+  sendJsonMessage({ type: "inject", content: content }, entry.id);
+  injectInput.value = "";
+  console.log(`[${entry.id}] Sent injection:`, content);
+};
+
+// Allow Enter key to inject
+injectInput.addEventListener("keydown", (e) => {
+  if (e.key === "Enter") {
+    e.preventDefault();
+    injectBtn.click();
+  }
+});
+
 renderMessages();
 initCharacters();
+
+// ==================== GAME MANAGER ====================
+
+let gmWebSocket = null;
+let gmState = {
+  enabled: false,
+  is_processing: false,
+  seconds_until_tick: 0,
+  tick_interval: 30,
+  last_thinking: "",
+  last_actions: [],
+  history: []
+};
+
+function initGameManager() {
+  const wsProto = window.location.protocol === "https:" ? "wss:" : "ws:";
+  const gmUrl = `${wsProto}//${location.host}/ws/game_manager`;
+  
+  gmWebSocket = new WebSocket(gmUrl);
+  
+  gmWebSocket.onopen = () => {
+    console.log("[GameManager] WebSocket connected");
+    updateGmStatus("connected");
+  };
+  
+  gmWebSocket.onclose = () => {
+    console.log("[GameManager] WebSocket disconnected, reconnecting...");
+    updateGmStatus("disconnected");
+    setTimeout(initGameManager, 2000);
+  };
+  
+  gmWebSocket.onerror = (err) => {
+    console.error("[GameManager] WebSocket error", err);
+  };
+  
+  gmWebSocket.onmessage = (evt) => {
+    try {
+      const data = JSON.parse(evt.data);
+      if (data.type === "game_manager_state") {
+        handleGmStateUpdate(data);
+      }
+    } catch (e) {
+      console.error("[GameManager] Failed to parse message", e);
+    }
+  };
+}
+
+function handleGmStateUpdate(data) {
+  gmState = {
+    enabled: data.enabled,
+    is_processing: data.is_processing,
+    seconds_until_tick: data.seconds_until_tick,
+    tick_interval: data.tick_interval,
+    last_thinking: data.last_thinking || "",
+    last_actions: data.last_actions || [],
+    history: data.history || []
+  };
+  
+  renderGameManager();
+}
+
+function updateGmStatus(status) {
+  if (status === "connected") {
+    // Will be updated by state
+  } else if (status === "disconnected") {
+    gmStatus.textContent = "● Disconnected";
+    gmStatus.className = "gm-status disabled";
+  }
+}
+
+function renderGameManager() {
+  // Update enabled/disabled overlay
+  if (!gmState.enabled) {
+    gmDisabledOverlay.classList.add("visible");
+    gmStatus.textContent = "● Disabled";
+    gmStatus.className = "gm-status disabled";
+    return;
+  } else {
+    gmDisabledOverlay.classList.remove("visible");
+  }
+  
+  // Update status
+  if (gmState.is_processing) {
+    gmStatus.textContent = "● Processing...";
+    gmStatus.className = "gm-status processing";
+  } else {
+    gmStatus.textContent = "● Active";
+    gmStatus.className = "gm-status active";
+  }
+  
+  // Update timer
+  gmTimer.textContent = `${gmState.seconds_until_tick}s`;
+  
+  // Update thinking
+  if (gmState.last_thinking) {
+    gmThinking.innerHTML = escapeHtml(gmState.last_thinking);
+  } else {
+    gmThinking.innerHTML = "<em>Waiting for first tick...</em>";
+  }
+  
+  // Update actions
+  if (gmState.last_actions && gmState.last_actions.length > 0) {
+    gmActions.innerHTML = gmState.last_actions.map(action => `
+      <div class="gm-action-item">
+        <div class="gm-action-target">→ ${escapeHtml(action.target)}</div>
+        <div class="gm-action-text">${escapeHtml(action.instruction)}</div>
+      </div>
+    `).join("");
+  } else {
+    gmActions.innerHTML = "<em>No actions</em>";
+  }
+  
+  // Update history
+  if (gmState.history && gmState.history.length > 0) {
+    gmHistory.innerHTML = gmState.history.slice().reverse().map(entry => {
+      const time = new Date(entry.timestamp * 1000);
+      const timeStr = time.toLocaleTimeString();
+      const actionCount = entry.actions ? entry.actions.length : 0;
+      const summary = actionCount > 0 
+        ? `${actionCount} injection(s)` 
+        : "No changes";
+      return `
+        <div class="gm-history-item">
+          <span class="gm-history-time">${timeStr}</span>
+          <span class="gm-history-summary"> - ${summary}</span>
+        </div>
+      `;
+    }).join("");
+  } else {
+    gmHistory.innerHTML = "<em>No history</em>";
+  }
+  
+  // Update clues display
+  if (gmClues) {
+    if (gmState.clues && gmState.clues.length > 0) {
+      gmClues.innerHTML = gmState.clues.map((clue, idx) => `
+        <div class="gm-clue-item">
+          <span class="gm-clue-text">${escapeHtml(clue)}</span>
+          <button class="gm-clue-remove" onclick="removeGmClue(${idx})" title="Remove clue">✕</button>
+        </div>
+      `).join("");
+    } else {
+      gmClues.innerHTML = "<em>No active clues</em>";
+    }
+  }
+}
+
+// Remove a clue from Game Manager
+function removeGmClue(index) {
+  if (gmWebSocket && gmWebSocket.readyState === WebSocket.OPEN) {
+    gmWebSocket.send(JSON.stringify({ type: "remove_clue", index: index }));
+    console.log("[GameManager] Remove clue at index:", index);
+  }
+}
+
+// Trigger button
+if (gmTriggerBtn) {
+  gmTriggerBtn.onclick = () => {
+    if (gmWebSocket && gmWebSocket.readyState === WebSocket.OPEN) {
+      gmWebSocket.send(JSON.stringify({ type: "trigger" }));
+      console.log("[GameManager] Manual trigger sent");
+    }
+  };
+}
+
+// Game Manager Inject button
+if (gmInjectBtn && gmInjectInput) {
+  gmInjectBtn.onclick = () => {
+    const clue = gmInjectInput.value.trim();
+    if (!clue) return;
+    
+    if (gmWebSocket && gmWebSocket.readyState === WebSocket.OPEN) {
+      gmWebSocket.send(JSON.stringify({ type: "inject_clue", content: clue }));
+      console.log("[GameManager] Clue injected:", clue);
+      gmInjectInput.value = "";
+    }
+  };
+  
+  // Enter key to submit
+  gmInjectInput.addEventListener("keypress", (e) => {
+    if (e.key === "Enter") {
+      gmInjectBtn.click();
+    }
+  });
+}
+
+// Initialize Game Manager connection
+initGameManager();
