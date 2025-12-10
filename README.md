@@ -5,6 +5,8 @@ Der technische **Core (Audio-Streaming, STT, TTS, WebSocket-Struktur)** basiert 
 
 **Natürliche Sprachkonversationen mit mehreren LLM-gestützten NPCs in Echtzeit.**
 
+![LLM NPCs Demo](example.png)
+
 Im Gegensatz zum Originalprojekt fokussiert sich diese Variante darauf, **mehrere eigenständige NPC-Charaktere** parallel zu betreiben, die:
 
 - eigene System-Prompts, Wissensstände und Rollen besitzen,
