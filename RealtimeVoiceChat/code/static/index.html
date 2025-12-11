@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Real-Time Voice Chat</title>
+  <title>NPC Agents</title>
   <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Inter:400,500,700&display=swap">
   <style>
     :root {
@@ -584,9 +584,149 @@
         order: 1;
       }
     }
+    
+    /* ============================================
+       Loading Overlay Styles
+       ============================================ */
+    .loading-overlay {
+      position: fixed;
+      top: 0;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      background: linear-gradient(135deg, #1a1a2e 0%, #16213e 50%, #0f3460 100%);
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      z-index: 9999;
+      transition: opacity 0.5s ease, visibility 0.5s ease;
+    }
+    .loading-overlay.hidden {
+      opacity: 0;
+      visibility: hidden;
+      pointer-events: none;
+    }
+    .loading-logo {
+      font-size: 4rem;
+      margin-bottom: 24px;
+      animation: float 3s ease-in-out infinite;
+    }
+    @keyframes float {
+      0%, 100% { transform: translateY(0); }
+      50% { transform: translateY(-10px); }
+    }
+    .loading-title {
+      color: #fff;
+      font-size: 1.8rem;
+      font-weight: 600;
+      margin-bottom: 8px;
+      letter-spacing: 1px;
+    }
+    .loading-subtitle {
+      color: #8892b0;
+      font-size: 0.95rem;
+      margin-bottom: 40px;
+    }
+    .loading-progress-container {
+      width: 400px;
+      max-width: 90%;
+    }
+    .loading-progress-bar-bg {
+      width: 100%;
+      height: 8px;
+      background: rgba(255,255,255,0.1);
+      border-radius: 8px;
+      overflow: hidden;
+      margin-bottom: 16px;
+    }
+    .loading-progress-bar {
+      height: 100%;
+      background: linear-gradient(90deg, #6366f1, #8b5cf6, #a855f7);
+      border-radius: 8px;
+      width: 0%;
+      transition: width 0.3s ease;
+    }
+    .loading-status {
+      color: #ccd6f6;
+      font-size: 0.9rem;
+      text-align: center;
+      min-height: 24px;
+    }
+    .loading-characters {
+      display: flex;
+      gap: 16px;
+      margin-top: 32px;
+      flex-wrap: wrap;
+      justify-content: center;
+    }
+    .loading-character {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 10px 16px;
+      background: rgba(255,255,255,0.05);
+      border-radius: 12px;
+      border: 1px solid rgba(255,255,255,0.1);
+      transition: all 0.3s ease;
+    }
+    .loading-character.ready {
+      background: rgba(74, 222, 128, 0.15);
+      border-color: rgba(74, 222, 128, 0.3);
+    }
+    .loading-character.loading {
+      border-color: rgba(139, 92, 246, 0.4);
+      animation: pulse-border 1.5s infinite;
+    }
+    @keyframes pulse-border {
+      0%, 100% { border-color: rgba(139, 92, 246, 0.2); }
+      50% { border-color: rgba(139, 92, 246, 0.6); }
+    }
+    .loading-character-icon {
+      font-size: 1.2rem;
+    }
+    .loading-character-name {
+      color: #e0e0e0;
+      font-size: 0.85rem;
+      font-weight: 500;
+    }
+    .loading-character-status {
+      font-size: 0.75rem;
+      color: #888;
+      margin-left: auto;
+    }
+    .loading-character.ready .loading-character-status {
+      color: #4ade80;
+    }
+    .loading-character.loading .loading-character-status {
+      color: #a78bfa;
+    }
+    .loading-steps {
+      margin-top: 24px;
+      font-size: 0.8rem;
+      color: #64748b;
+      text-align: center;
+    }
   </style>
 </head>
 <body>
+  <!-- Loading Overlay -->
+  <div class="loading-overlay" id="loadingOverlay">
+    <div class="loading-logo">🎭</div>
+    <div class="loading-title">LLM NPCs</div>
+    <div class="loading-subtitle">Preparing your AI companions...</div>
+    <div class="loading-progress-container">
+      <div class="loading-progress-bar-bg">
+        <div class="loading-progress-bar" id="loadingProgressBar"></div>
+      </div>
+      <div class="loading-status" id="loadingStatus">Connecting to server...</div>
+    </div>
+    <div class="loading-characters" id="loadingCharacters">
+      <!-- Character loading cards will be inserted here -->
+    </div>
+    <div class="loading-steps" id="loadingSteps"></div>
+  </div>
+
   <div id="app">
     <div class="chat-container">
       <div class="header">
@@ -603,7 +743,7 @@
             font-family="Inter"
           >AI</text>
         </svg>
-        Real-Time Voice Chat
+        NPC Agents
         <select id="characterSelect" class="character-select"></select>
         <span class="character-pill" id="characterBadge"></span>
         <span class="status" id="status"></span>
@@ -678,7 +818,7 @@
         </div>
         
         <div class="gm-inject-section">
-          <div class="gm-section-title">💡 Game Clue</div>
+          <div class="gm-section-title">💉 Inject Context</div>
           <div class="gm-inject-row">
             <input type="text" id="gmInjectInput" class="gm-inject-input" placeholder="e.g. 'Player found the murder weapon'" />
             <button id="gmInjectBtn" class="gm-inject-btn">+ Add</button>

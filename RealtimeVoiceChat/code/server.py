@@ -1195,6 +1195,10 @@ async def websocket_endpoint(ws: WebSocket):
             reference_audio=session.config.get("reference_audio"),
             session_id=character_id,
         )
+    
+    # Set up message queue
+    message_queue = session.message_queue or asyncio.Queue()
+    session.message_queue = message_queue
 
     audio_chunks = session.audio_queue or asyncio.Queue()
     session.audio_queue = audio_chunks
@@ -1221,6 +1225,13 @@ async def websocket_endpoint(ws: WebSocket):
         asyncio.create_task(send_tts_chunks(app, session)),
     ]
     session.tasks = tasks
+    
+    # Send character_ready signal - initialization is complete
+    logger.info(f"🖥️✅ Character {character_id} fully initialized and ready")
+    await ws.send_json({
+        "type": "character_ready",
+        "character_id": character_id
+    })
 
     try:
         # Wait for any task to complete (e.g., client disconnect)
