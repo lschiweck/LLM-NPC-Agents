@@ -568,21 +568,226 @@
       color: #666;
     }
     
+    /* ============================================
+       NPC Conversation Panel Styles
+       ============================================ */
+    .npc-conv-panel {
+      width: 320px;
+      background: #1a1a2e;
+      border-radius: 16px;
+      margin: 24px 16px 24px 24px;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+      box-shadow: 0 4px 20px rgba(0,0,0,0.3);
+      max-height: calc(100vh - 48px);
+    }
+    .npc-conv-header {
+      background: linear-gradient(135deg, #2d1f3d, #1a1a2e);
+      padding: 16px 20px;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      border-bottom: 1px solid #3d2d54;
+    }
+    .npc-conv-icon {
+      font-size: 1.4rem;
+    }
+    .npc-conv-title {
+      color: #fff;
+      font-weight: 600;
+      font-size: 1rem;
+      letter-spacing: 0.5px;
+    }
+    .npc-conv-status {
+      margin-left: auto;
+      font-size: 0.8rem;
+      padding: 4px 10px;
+      border-radius: 12px;
+      background: rgba(255,255,255,0.1);
+    }
+    .npc-conv-status.idle { color: #94a3b8; }
+    .npc-conv-status.running { color: #a78bfa; animation: pulse 1s infinite; }
+    .npc-conv-status.finished { color: #4ade80; }
+    
+    .npc-conv-content {
+      flex: 1;
+      padding: 16px;
+      overflow-y: auto;
+      display: flex;
+      flex-direction: column;
+      gap: 14px;
+    }
+    
+    .npc-conv-config {
+      background: rgba(255,255,255,0.05);
+      border-radius: 10px;
+      padding: 14px;
+      border: 1px solid rgba(167, 139, 250, 0.2);
+    }
+    .npc-conv-row {
+      display: flex;
+      gap: 10px;
+      margin-bottom: 10px;
+      align-items: center;
+    }
+    .npc-conv-row:last-child {
+      margin-bottom: 0;
+    }
+    .npc-conv-label {
+      color: #888;
+      font-size: 0.75rem;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      min-width: 50px;
+    }
+    .npc-conv-select {
+      flex: 1;
+      background: rgba(0,0,0,0.3);
+      border: 1px solid rgba(255,255,255,0.15);
+      border-radius: 6px;
+      padding: 8px 10px;
+      color: #fff;
+      font-size: 0.85rem;
+      cursor: pointer;
+    }
+    .npc-conv-select:focus {
+      outline: none;
+      border-color: #a78bfa;
+    }
+    .npc-conv-turns-input {
+      width: 60px;
+      background: rgba(0,0,0,0.3);
+      border: 1px solid rgba(255,255,255,0.15);
+      border-radius: 6px;
+      padding: 8px 10px;
+      color: #fff;
+      font-size: 0.85rem;
+      text-align: center;
+    }
+    .npc-conv-context {
+      width: 100%;
+      background: rgba(0,0,0,0.3);
+      border: 1px solid rgba(255,255,255,0.15);
+      border-radius: 6px;
+      padding: 10px;
+      color: #fff;
+      font-size: 0.85rem;
+      resize: vertical;
+      min-height: 60px;
+      font-family: inherit;
+    }
+    .npc-conv-context::placeholder {
+      color: rgba(255,255,255,0.4);
+    }
+    .npc-conv-buttons {
+      display: flex;
+      gap: 8px;
+      margin-top: 10px;
+    }
+    .npc-conv-start-btn {
+      flex: 1;
+      background: linear-gradient(135deg, #a78bfa, #8b5cf6);
+      color: #fff;
+      border: none;
+      padding: 10px 16px;
+      border-radius: 8px;
+      cursor: pointer;
+      font-size: 0.9rem;
+      font-weight: 500;
+      transition: transform 0.1s, opacity 0.2s;
+    }
+    .npc-conv-start-btn:hover { opacity: 0.9; }
+    .npc-conv-start-btn:active { transform: scale(0.97); }
+    .npc-conv-start-btn:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+    }
+    .npc-conv-stop-btn {
+      background: linear-gradient(135deg, #f87171, #ef4444);
+      color: #fff;
+      border: none;
+      padding: 10px 16px;
+      border-radius: 8px;
+      cursor: pointer;
+      font-size: 0.9rem;
+      font-weight: 500;
+    }
+    .npc-conv-stop-btn:hover { opacity: 0.9; }
+    
+    .npc-conv-messages {
+      flex: 1;
+      min-height: 150px;
+      max-height: 350px;
+      overflow-y: auto;
+      background: rgba(0,0,0,0.2);
+      border-radius: 10px;
+      padding: 12px;
+      border: 1px solid rgba(255,255,255,0.08);
+    }
+    .npc-conv-empty {
+      color: #666;
+      font-style: italic;
+      text-align: center;
+      padding: 20px;
+      font-size: 0.85rem;
+    }
+    .npc-conv-turn {
+      margin-bottom: 12px;
+      animation: fadeIn 0.3s ease;
+    }
+    @keyframes fadeIn {
+      from { opacity: 0; transform: translateY(5px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+    .npc-conv-turn-header {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin-bottom: 4px;
+    }
+    .npc-conv-speaker {
+      color: #a78bfa;
+      font-weight: 600;
+      font-size: 0.85rem;
+    }
+    .npc-conv-turn-num {
+      color: #555;
+      font-size: 0.7rem;
+    }
+    .npc-conv-message {
+      color: #ddd;
+      font-size: 0.9rem;
+      line-height: 1.5;
+      padding-left: 4px;
+    }
+    .npc-conv-turn.last .npc-conv-speaker {
+      color: #4ade80;
+    }
+    
     /* Responsive: Stack panels on small screens */
-    @media (max-width: 900px) {
+    @media (max-width: 1400px) {
+      .npc-conv-panel {
+        width: 280px;
+      }
+      .gm-panel {
+        width: 280px;
+      }
+    }
+    @media (max-width: 1100px) {
       #app {
         flex-direction: column;
         align-items: center;
       }
-      .gm-panel {
+      .gm-panel, .npc-conv-panel {
         width: 100%;
         max-width: 480px;
-        margin: 0 0 24px 0;
-        order: 2;
+        margin: 12px 0;
+        max-height: none;
       }
-      .chat-container {
-        order: 1;
-      }
+      .npc-conv-panel { order: 2; }
+      .chat-container { order: 1; }
+      .gm-panel { order: 3; }
     }
     
     /* ============================================
@@ -728,6 +933,50 @@
   </div>
 
   <div id="app">
+    <!-- NPC Conversation Panel (Left Side) -->
+    <div class="npc-conv-panel" id="npcConvPanel">
+      <div class="npc-conv-header">
+        <span class="npc-conv-icon">🎭</span>
+        <span class="npc-conv-title">NPC Conversation</span>
+        <span class="npc-conv-status idle" id="npcConvStatus">● Idle</span>
+      </div>
+      
+      <div class="npc-conv-content">
+        <div class="npc-conv-config">
+          <div class="npc-conv-row">
+            <span class="npc-conv-label">NPC 1</span>
+            <select class="npc-conv-select" id="npcConvNpc1">
+              <option value="">Select character...</option>
+            </select>
+          </div>
+          <div class="npc-conv-row">
+            <span class="npc-conv-label">NPC 2</span>
+            <select class="npc-conv-select" id="npcConvNpc2">
+              <option value="">(None - Monologue)</option>
+            </select>
+          </div>
+          <div class="npc-conv-row">
+            <span class="npc-conv-label">Turns</span>
+            <input type="number" class="npc-conv-turns-input" id="npcConvTurns" value="4" min="1" max="20">
+          </div>
+          <div class="npc-conv-row" style="flex-direction: column; align-items: stretch;">
+            <span class="npc-conv-label" style="margin-bottom: 6px;">Context / Topic</span>
+            <textarea class="npc-conv-context" id="npcConvContext" placeholder="e.g., 'Discuss what happened the night David was murdered'"></textarea>
+          </div>
+          <div class="npc-conv-buttons">
+            <button class="npc-conv-start-btn" id="npcConvStartBtn">▶ Start Conversation</button>
+            <button class="npc-conv-stop-btn" id="npcConvStopBtn" style="display: none;">⏹ Stop</button>
+          </div>
+        </div>
+        
+        <div class="npc-conv-messages" id="npcConvMessages">
+          <div class="npc-conv-empty">
+            Select characters and start a conversation
+          </div>
+        </div>
+      </div>
+    </div>
+    
     <div class="chat-container">
       <div class="header">
         <!-- Centered “AI” text within the circle -->

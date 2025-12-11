@@ -189,7 +189,8 @@ class SpeechPipelineManager:
             logger.debug(f"🗣️🧠🕒 LLM inference time: {self.llm_inference_time:.2f}ms")
 
         # --- State ---
-        self.history = list(history) if history else []
+        self.history = list(history) if history else []  # Player conversation history
+        self.inter_npc_history: Dict[str, List[dict]] = {}  # NPC-to-NPC conversation histories (keyed by other NPC's ID)
         self.requests_queue = Queue()
         self.running_generation: Optional[RunningGeneration] = None
 
@@ -1099,6 +1100,7 @@ class SpeechPipelineManager:
         logger.info("🗣️🔄 Resetting pipeline state...")
         self.abort_generation(wait_for_completion=True, timeout=7.0, reason="reset") # Ensure clean slate
         self.history = []
+        self.inter_npc_history = {}
         logger.info("🗣️🧹 History cleared. Reset complete.")
 
     def inject(self, content: str) -> str:

@@ -916,3 +916,342 @@ if (gmInjectBtn && gmInjectInput) {
 
 // Initialize Game Manager connection
 initGameManager();
+
+// ==================== NPC CONVERSATION ====================
+
+// NPC Conversation UI elements
+const npcConvPanel = document.getElementById("npcConvPanel");
+const npcConvStatus = document.getElementById("npcConvStatus");
+const npcConvNpc1 = document.getElementById("npcConvNpc1");
+const npcConvNpc2 = document.getElementById("npcConvNpc2");
+const npcConvTurns = document.getElementById("npcConvTurns");
+const npcConvContext = document.getElementById("npcConvContext");
+const npcConvStartBtn = document.getElementById("npcConvStartBtn");
+const npcConvStopBtn = document.getElementById("npcConvStopBtn");
+const npcConvMessages = document.getElementById("npcConvMessages");
+
+let npcConvWebSocket = null;
+let npcConvState = {
+  state: "idle",
+  config: null,
+  current_turn: 0,
+  turns_remaining: 0,
+  current_speaker: null,
+  conversation_history: [],
+  error: null
+};
+let npcConvAvailableCharacters = [];
+
+// NPC Conversation Audio
+let npcConvAudioContext = null;
+let npcConvAudioQueue = [];
+let npcConvIsPlaying = false;
+
+function initNpcConversation() {
+  const wsProto = window.location.protocol === "https:" ? "wss:" : "ws:";
+  const npcConvUrl = `${wsProto}//${location.host}/ws/npc_conversation`;
+  
+  npcConvWebSocket = new WebSocket(npcConvUrl);
+  
+  npcConvWebSocket.onopen = () => {
+    console.log("[NPC Conv] WebSocket connected");
+    updateNpcConvStatus("idle");
+  };
+  
+  npcConvWebSocket.onclose = () => {
+    console.log("[NPC Conv] WebSocket disconnected, reconnecting...");
+    updateNpcConvStatus("disconnected");
+    setTimeout(initNpcConversation, 2000);
+  };
+  
+  npcConvWebSocket.onerror = (err) => {
+    console.error("[NPC Conv] WebSocket error", err);
+  };
+  
+  npcConvWebSocket.onmessage = async (evt) => {
+    try {
+      if (evt.data instanceof Blob) {
+        // Audio data
+        const arrayBuffer = await evt.data.arrayBuffer();
+        handleNpcConvAudio(arrayBuffer);
+      } else {
+        const data = JSON.parse(evt.data);
+        if (data.type === "npc_conversation_state") {
+          handleNpcConvStateUpdate(data);
+        } else if (data.type === "available_characters") {
+          handleNpcConvAvailableCharacters(data);
+        } else if (data.type === "npc_conversation_turn") {
+          handleNpcConvTurn(data);
+        } else if (data.type === "error") {
+          console.error("[NPC Conv] Error:", data.message);
+          alert("NPC Conversation Error: " + data.message);
+        }
+      }
+    } catch (e) {
+      console.error("[NPC Conv] Failed to parse message", e);
+    }
+  };
+}
+
+let npcConvConnectedCharacters = [];
+
+function handleNpcConvAvailableCharacters(data) {
+  // data can be array (old format) or object with characters and connected
+  let characters, connected;
+  if (Array.isArray(data)) {
+    characters = data;
+    connected = data;
+  } else {
+    characters = data.characters || [];
+    connected = data.connected || [];
+  }
+  
+  npcConvAvailableCharacters = characters;
+  npcConvConnectedCharacters = connected;
+  
+  // Populate dropdowns - show connection status
+  const npc1Options = characters.map(c => {
+    const isConnected = connected.includes(c);
+    return `<option value="${c}" ${!isConnected ? 'disabled' : ''}>${c}${isConnected ? ' ✓' : ' (not connected)'}</option>`;
+  }).join("");
+  
+  const npc2Options = `<option value="">(None - Monologue)</option>` + 
+    characters.map(c => {
+      const isConnected = connected.includes(c);
+      return `<option value="${c}" ${!isConnected ? 'disabled' : ''}>${c}${isConnected ? ' ✓' : ' (not connected)'}</option>`;
+    }).join("");
+  
+  if (npcConvNpc1) {
+    npcConvNpc1.innerHTML = `<option value="">Select character...</option>` + npc1Options;
+  }
+  if (npcConvNpc2) {
+    npcConvNpc2.innerHTML = npc2Options;
+  }
+  
+  console.log("[NPC Conv] Characters:", characters, "Connected:", connected);
+}
+
+function handleNpcConvStateUpdate(data) {
+  npcConvState = {
+    state: data.state || "idle",
+    config: data.config,
+    current_turn: data.current_turn || 0,
+    turns_remaining: data.turns_remaining || 0,
+    current_speaker: data.current_speaker,
+    conversation_history: data.conversation_history || [],
+    error: data.error
+  };
+  
+  renderNpcConversation();
+}
+
+function handleNpcConvTurn(data) {
+  // Add turn to local state for immediate rendering
+  const turn = {
+    speaker_id: data.speaker_id,
+    message: data.message,
+    turn_number: data.turn_number,
+    is_last: data.is_last
+  };
+  
+  // Check if this turn already exists in history
+  const exists = npcConvState.conversation_history.some(t => 
+    t.turn_number === turn.turn_number && t.speaker_id === turn.speaker_id
+  );
+  
+  if (!exists) {
+    npcConvState.conversation_history.push(turn);
+    renderNpcConvMessages();
+  }
+  
+  console.log(`[NPC Conv] Turn ${turn.turn_number}: ${turn.speaker_id} says: ${turn.message.substring(0, 50)}...`);
+}
+
+function handleNpcConvAudio(arrayBuffer) {
+  // First 32 bytes are speaker ID (null-padded)
+  const headerBytes = new Uint8Array(arrayBuffer, 0, 32);
+  let speakerId = "";
+  for (let i = 0; i < 32 && headerBytes[i] !== 0; i++) {
+    speakerId += String.fromCharCode(headerBytes[i]);
+  }
+  
+  // Rest is audio data
+  const audioData = arrayBuffer.slice(32);
+  
+  console.log(`[NPC Conv] Received audio for ${speakerId}, ${audioData.byteLength} bytes`);
+  
+  if (audioData.byteLength < 100) {
+    console.warn(`[NPC Conv] Audio data too small for ${speakerId}, skipping`);
+    return;
+  }
+  
+  // Queue audio for playback
+  npcConvAudioQueue.push({ speakerId, audioData });
+  playNextNpcConvAudio();
+}
+
+async function playNextNpcConvAudio() {
+  if (npcConvIsPlaying || npcConvAudioQueue.length === 0) return;
+  
+  npcConvIsPlaying = true;
+  const { speakerId, audioData } = npcConvAudioQueue.shift();
+  
+  try {
+    // Create or resume audio context
+    if (!npcConvAudioContext) {
+      npcConvAudioContext = new (window.AudioContext || window.webkitAudioContext)();
+      console.log(`[NPC Conv] Created AudioContext, state: ${npcConvAudioContext.state}`);
+    }
+    
+    // Resume if suspended (browser autoplay policy)
+    if (npcConvAudioContext.state === 'suspended') {
+      console.log('[NPC Conv] Resuming suspended AudioContext...');
+      await npcConvAudioContext.resume();
+    }
+    
+    // Decode the audio - 24kHz 16-bit PCM
+    const int16Array = new Int16Array(audioData);
+    if (int16Array.length === 0) {
+      console.warn(`[NPC Conv] Empty audio data for ${speakerId}`);
+      npcConvIsPlaying = false;
+      playNextNpcConvAudio();
+      return;
+    }
+    
+    const float32Array = new Float32Array(int16Array.length);
+    for (let i = 0; i < int16Array.length; i++) {
+      float32Array[i] = int16Array[i] / 32768.0;
+    }
+    
+    const audioBuffer = npcConvAudioContext.createBuffer(1, float32Array.length, 24000);
+    audioBuffer.getChannelData(0).set(float32Array);
+    
+    const source = npcConvAudioContext.createBufferSource();
+    source.buffer = audioBuffer;
+    source.connect(npcConvAudioContext.destination);
+    
+    source.onended = () => {
+      console.log(`[NPC Conv] Finished playing audio for ${speakerId}`);
+      npcConvIsPlaying = false;
+      playNextNpcConvAudio();
+    };
+    
+    source.start();
+    const durationSec = (float32Array.length / 24000).toFixed(1);
+    console.log(`[NPC Conv] Playing ${durationSec}s audio for ${speakerId}`);
+    
+  } catch (e) {
+    console.error("[NPC Conv] Audio playback error:", e);
+    npcConvIsPlaying = false;
+    playNextNpcConvAudio();
+  }
+}
+
+function updateNpcConvStatus(status) {
+  if (!npcConvStatus) return;
+  
+  if (status === "idle") {
+    npcConvStatus.textContent = "● Idle";
+    npcConvStatus.className = "npc-conv-status idle";
+  } else if (status === "running") {
+    npcConvStatus.textContent = "● Running...";
+    npcConvStatus.className = "npc-conv-status running";
+  } else if (status === "finished") {
+    npcConvStatus.textContent = "● Finished";
+    npcConvStatus.className = "npc-conv-status finished";
+  } else if (status === "disconnected") {
+    npcConvStatus.textContent = "● Disconnected";
+    npcConvStatus.className = "npc-conv-status idle";
+  }
+}
+
+function renderNpcConversation() {
+  // Update status
+  updateNpcConvStatus(npcConvState.state);
+  
+  // Show/hide buttons
+  if (npcConvStartBtn && npcConvStopBtn) {
+    if (npcConvState.state === "running") {
+      npcConvStartBtn.style.display = "none";
+      npcConvStopBtn.style.display = "block";
+    } else {
+      npcConvStartBtn.style.display = "block";
+      npcConvStopBtn.style.display = "none";
+    }
+  }
+  
+  // Render messages
+  renderNpcConvMessages();
+}
+
+function renderNpcConvMessages() {
+  if (!npcConvMessages) return;
+  
+  if (npcConvState.conversation_history.length === 0) {
+    npcConvMessages.innerHTML = `<div class="npc-conv-empty">Select characters and start a conversation</div>`;
+    return;
+  }
+  
+  npcConvMessages.innerHTML = npcConvState.conversation_history.map(turn => `
+    <div class="npc-conv-turn ${turn.is_last ? 'last' : ''}">
+      <div class="npc-conv-turn-header">
+        <span class="npc-conv-speaker">${turn.speaker_id}</span>
+        <span class="npc-conv-turn-num">#${turn.turn_number}</span>
+      </div>
+      <div class="npc-conv-message">${escapeHtml(turn.message)}</div>
+    </div>
+  `).join("");
+  
+  // Scroll to bottom
+  npcConvMessages.scrollTop = npcConvMessages.scrollHeight;
+}
+
+function escapeHtml(text) {
+  const div = document.createElement('div');
+  div.textContent = text;
+  return div.innerHTML;
+}
+
+// Start conversation button
+if (npcConvStartBtn) {
+  npcConvStartBtn.onclick = () => {
+    const npc1 = npcConvNpc1 ? npcConvNpc1.value : "";
+    const npc2 = npcConvNpc2 ? npcConvNpc2.value : "";
+    const turns = npcConvTurns ? parseInt(npcConvTurns.value) || 4 : 4;
+    const context = npcConvContext ? npcConvContext.value.trim() : "";
+    
+    if (!npc1) {
+      alert("Please select NPC 1");
+      return;
+    }
+    
+    if (npcConvWebSocket && npcConvWebSocket.readyState === WebSocket.OPEN) {
+      // Clear previous conversation
+      npcConvState.conversation_history = [];
+      npcConvAudioQueue = [];
+      renderNpcConvMessages();
+      
+      npcConvWebSocket.send(JSON.stringify({
+        type: "start_conversation",
+        npc1_id: npc1,
+        npc2_id: npc2,
+        turns: turns,
+        context: context
+      }));
+      console.log(`[NPC Conv] Starting conversation: ${npc1} <-> ${npc2 || '(monologue)'}, ${turns} turns`);
+    }
+  };
+}
+
+// Stop conversation button
+if (npcConvStopBtn) {
+  npcConvStopBtn.onclick = () => {
+    if (npcConvWebSocket && npcConvWebSocket.readyState === WebSocket.OPEN) {
+      npcConvWebSocket.send(JSON.stringify({ type: "stop_conversation" }));
+      console.log("[NPC Conv] Stop requested");
+    }
+  };
+}
+
+// Initialize NPC Conversation connection
+initNpcConversation();
