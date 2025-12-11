@@ -1114,7 +1114,7 @@ class SpeechPipelineManager:
         Returns:
             The formatted injection string that was added.
         """
-        injection = f"\n\n[GAME]: {content}"
+        injection = f"\n\n[DIRECTOR'S NOTE - DO NOT SAY THIS OUT LOUD, JUST FOLLOW THIS BEHAVIORAL INSTRUCTION]: {content}"
         self.system_prompt += injection
         # Also update the LLM's system prompt
         if self.llm:
