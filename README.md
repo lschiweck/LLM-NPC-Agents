@@ -1,21 +1,40 @@
-# LLM NPCs – Real-Time Voice Conversation with AI
+# LLM NPCs – Intelligent Context-Aware AI Agents for Unity
 
-**Note:** This project is a **heavily modified version** of [KoljaB/RealtimeVoiceChat](https://github.com/KoljaB/RealtimeVoiceChat).  
-The technical **core (audio streaming, STT, TTS, WebSocket structure)** is based on that project, but the backend has been significantly expanded and specifically adapted for **multi-LLM-NPC interactions**.
+**Note:** This project is a **modified version** of [KoljaB/RealtimeVoiceChat](https://github.com/KoljaB/RealtimeVoiceChat).  
+The technical **core (audio streaming, STT, TTS, WebSocket structure)** is based on that project, but the backend has been significantly expanded to support **multi-NPC interaction**, **Game Manager story orchestration**, and **dynamic context injection**.
 
-**Natural voice conversations with multiple LLM-powered NPCs in real-time.**
+---
+
+**Intelligent agent-based NPCs for Unity** – Create context-aware characters that dynamically respond to game events, follow evolving storylines, and interact naturally through real-time voice conversation.
 
 ![LLM NPCs Demo](example.png)
 
-Unlike the original project, this variant focuses on running **multiple independent NPC characters** in parallel, which:
+## What This Project Does
 
-- have their own system prompts, knowledge bases, and roles,
-- can interact with each other and with the user in a shared scene,
-- can be specifically addressed, activated, or combined via the Unity client (e.g., dialogues between NPCs, moderation by the player, role changes).
+This system enables **intelligent NPC agents** in Unity that go beyond simple chatbots:
 
-This makes this project particularly suitable for **VR/game scenarios** where not just a single assistant, but an entire **ensemble of LLM NPCs** needs to be dynamically and voice-controlled.
+- 🎮 **Game Manager AI** – An invisible "game master" that orchestrates the story in the background, analyzes player actions, and dynamically injects instructions into NPCs to shape their behavior
+- 🧠 **Context-Aware NPCs** – Characters that understand game state, react to player discoveries, and adapt their responses based on injected game context
+- 🎭 **Multi-NPC Orchestration** – Run multiple independent characters in parallel, each with their own personality, knowledge, and role in the story
+- 🎤 **Real-Time Voice** – Natural speech input and synthesized voice output with minimal latency
 
-This project enables communication with AI characters via voice. Responses are returned as synthesized speech in near real-time. It consists of two main components:
+**Example use case**: A detective game where the Game Manager tracks what evidence the player finds, then injects nervousness into the guilty NPC when relevant topics come up – all happening dynamically without scripted dialogue trees.
+
+### Key Capabilities
+
+Via the Unity client, NPCs can be:
+- **Specifically addressed** – Talk to individual characters
+- **Dynamically activated** – Trigger conversations based on proximity or events
+- **Combined** – Enable dialogues between NPCs, player moderation, role changes
+- **Context-injected** – Feed game events to characters or the Game Manager in real-time
+
+This makes the project ideal for **VR/game scenarios** requiring an **ensemble of intelligent NPCs** that dynamically respond to an evolving narrative.
+
+> ⚠️ **Important:** This project provides the framework and architecture for intelligent NPCs, but **prompt engineering is required** to make it work well for your specific use case. You will need to heavily customize the system prompts, Game Manager instructions, and character configurations to fit your game's narrative and desired NPC behaviors. The included prompts serve as examples and starting points.
+
+---
+
+The system consists of two main components:
 
 1. **Backend (Python/FastAPI)** – Speech-to-Text, LLM inference, Text-to-Speech
 2. **Unity Client (C#)** – Integration into VR/3D applications
@@ -49,28 +68,36 @@ This project enables communication with AI characters via voice. Responses are r
 ## Architecture Overview
 
 ```
-┌──────────────────────────────────────────────────────────────────────────────┐
-│                              UNITY CLIENT                                    │
-│  ┌─────────────────┐    ┌──────────────────┐    ┌─────────────────────────┐  │
-│  │ LiveLlmManager  │───▶│ LiveLlmCharacter │───▶│ AudioSource (Playback)  │  │
-│  │ (Microphone)    │    │ (WebSocket)      │    │                         │  │
-│  └────────┬────────┘    └──────────────────┘    └─────────────────────────┘  │
-│           │                      ▲                                           │
-└───────────┼──────────────────────┼───────────────────────────────────────────┘
-            │ PCM Audio (48kHz)    │ TTS Chunks (Base64)
-            ▼                      │
-┌─────────────────────────────────────────────────────────────────────────────┐
-│                           PYTHON BACKEND                                    │
-│  ┌─────────────┐   ┌──────────────────┐   ┌─────────────────────────────┐   │
-│  │ FastAPI     │   │ AudioInput       │   │ SpeechPipelineManager       │   │
-│  │ WebSocket   │──▶│ Processor        │──▶│                             │   │
-│  │ Server      │   │ (RealtimeSTT)    │   │ ┌─────────┐ ┌─────────────┐ │   │
-│  └─────────────┘   └──────────────────┘   │ │ LLM     │ │ TTS         │ │   │
-│                                           │ │ (Ollama)│ │ (Kokoro/    │ │   │
-│                                           │ └─────────┘ │  Coqui)     │ │   │
-│                                           │             └─────────────┘ │   │
-│                                           └─────────────────────────────┘   │
-└─────────────────────────────────────────────────────────────────────────────┘
+┌───────────────────────────────────────────────────────────────────────────────────────────────────┐
+│                                        UNITY CLIENT                                               │
+│                                                                                                   │
+│  ┌─────────────────┐      ┌──────────────────┐      ┌─────────────────────────┐                   │
+│  │ LiveLlmManager  │─────▶│ LiveLlmCharacter │─────▶│ AudioSource (Playback)  │                   │
+│  │ (Microphone)    │      │ (WebSocket)      │      │                         │                   │
+│  └────────┬────────┘      └────────┬─────────┘      └─────────────────────────┘                   │
+│           │                        │ ▲                                              ▲             │
+│           │                        │ │                                              │             │
+└───────────┼────────────────────────┼─┼──────────────────────────────────────────────┼─────────────┘
+            │                        │ │                                              │
+            │ PCM Audio (48kHz)      │ │ TTS Chunks (Base64)      Unity Context       │ Game Events
+            │                        │ │                          (inject_clue)       │
+            ▼                        ▼ │                                              │
+┌───────────────────────────────────────────────────────────────────────────────────────────────────┐
+│                                        PYTHON BACKEND                                             │
+│                                                                                                   │
+│  ┌─────────────┐   ┌──────────────────┐   ┌────────────────────────┐   ┌─────────────────────────────────┐
+│  │ FastAPI     │   │ AudioInput       │   │ SpeechPipelineManager  │   │ 🎮 Game Manager                 │
+│  │ WebSocket   │──▶│ Processor        │──▶│                        │◀──│                                 │
+│  │ Server      │   │ (RealtimeSTT)    │   │ ┌───────┐ ┌──────────┐ │   │  • Periodic analysis (every Xs) │
+│  └─────────────┘   └──────────────────┘   │ │ LLM   │ │ TTS      │ │   │  • Reads all NPC histories      │
+│                                           │ │(Ollama)│ │(Kokoro/ │ │   │  • Receives Unity context       │
+│                                           │ └───────┘ │ Coqui)   │ │   │  • Injects into system prompts  │
+│                                           │           └──────────┘ │   │  • Sends events to Unity ───────┼──▲
+│                                           │                        │   │                                 │  │
+│                                           └────────────────────────┘   │  Story Orchestration AI         │  │
+│                                                                        └─────────────────────────────────┘  │
+│                                                                                                              │
+└──────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
 ```
 
 ### Conversation Flow
@@ -767,3 +794,30 @@ This project is under the MIT License. However, note the licenses of the compone
 - [RealtimeTTS Documentation](https://github.com/KoljaB/RealtimeTTS)
 - [Ollama Documentation](https://ollama.com/docs)
 - [NativeWebSocket for Unity](https://github.com/endel/NativeWebSocket)
+
+---
+
+## Citation
+
+If you use this project in academic work, publications, or research, please cite it as:
+
+> **LLM-NPC-Agents: Real-Time Context-Aware AI Characters with Dynamic Story Orchestration**  
+> Lennart Schiweck  
+> VR-Lab, Reutlingen University, 2025
+
+### BibTeX
+
+```bibtex
+@software{schiweck2025llmnpcagents,
+  author       = {Schiweck, Lennart},
+  title        = {LLM-NPC-Agents: Real-Time Context-Aware AI Characters with Dynamic Story Orchestration},
+  year         = {2025},
+  institution  = {VR-Lab, Reutlingen University},
+  url          = {https://github.com/lschiweck/LLM-NPC-Agents},
+  note         = {WebSocket-based backend for intelligent NPCs with Game Manager orchestration. Includes Unity client reference implementation.}
+}
+```
+
+---
+
+*Developed at the VR-Lab, Reutlingen University*

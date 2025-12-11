@@ -255,11 +255,17 @@ class GameManager:
             
             logger.info("🎮🧠 Game Manager thinking...")
             
-            # Generate response (no semaphore - runs in parallel)
-            full_response = ""
-            try:
+            # Generate response in a background thread to avoid blocking the event loop
+            def blocking_generate():
+                """Run LLM generation in a thread (it's synchronous/blocking)."""
+                response = ""
                 for chunk in self.llm.generate(text=prompt, history=None, use_system_prompt=True):
-                    full_response += chunk
+                    response += chunk
+                return response
+            
+            try:
+                # Run in thread pool - doesn't block the event loop!
+                full_response = await asyncio.to_thread(blocking_generate)
             except Exception as e:
                 logger.error(f"🎮💥 LLM generation failed: {e}")
                 self.state.is_processing = False

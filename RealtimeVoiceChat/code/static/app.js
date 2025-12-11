@@ -36,6 +36,17 @@ const gmInjectInput = document.getElementById("gmInjectInput");
 const gmInjectBtn = document.getElementById("gmInjectBtn");
 const gmClues = document.getElementById("gmClues");
 
+// Loading overlay UI elements
+const loadingOverlay = document.getElementById("loadingOverlay");
+const loadingProgressBar = document.getElementById("loadingProgressBar");
+const loadingStatus = document.getElementById("loadingStatus");
+const loadingCharacters = document.getElementById("loadingCharacters");
+const loadingSteps = document.getElementById("loadingSteps");
+
+// Loading state tracking
+const loadingStates = new Map(); // id -> { name, ready }
+let allCharactersReady = false;
+
 speedSlider.disabled = true;
 startBtn.disabled = true;
 
@@ -150,9 +161,107 @@ function escapeHtml(str) {
     .replace(/"/g, "&quot;");
 }
 
+// ============================================
+// Loading Overlay Functions
+// ============================================
+function initLoadingState(characterId, characterName) {
+  loadingStates.set(characterId, {
+    id: characterId,
+    name: characterName,
+    ready: false
+  });
+  renderLoadingUI();
+}
+
+function markCharacterReady(characterId) {
+  const state = loadingStates.get(characterId);
+  if (state) {
+    state.ready = true;
+    console.log(`[Loading] ${characterId} is ready`);
+  }
+  renderLoadingUI();
+  checkAllReady();
+}
+
+function renderLoadingUI() {
+  const states = Array.from(loadingStates.values());
+  const readyCount = states.filter(s => s.ready).length;
+  const totalCount = states.length;
+  
+  // Update progress bar
+  if (loadingProgressBar && totalCount > 0) {
+    const progress = (readyCount / totalCount) * 100;
+    loadingProgressBar.style.width = `${progress}%`;
+  }
+  
+  // Update status text
+  if (loadingStatus) {
+    const loadingChars = states.filter(s => !s.ready);
+    if (loadingChars.length > 0) {
+      loadingStatus.textContent = `Initializing ${loadingChars[0].name}...`;
+    } else if (totalCount > 0) {
+      loadingStatus.textContent = "All characters ready!";
+    }
+  }
+  
+  // Update character cards
+  if (loadingCharacters) {
+    const html = states.map(state => {
+      const statusClass = state.ready ? "ready" : "loading";
+      const icon = state.ready ? "✓" : "◌";
+      const statusText = state.ready ? "Ready" : "Initializing...";
+      return `
+        <div class="loading-character ${statusClass}">
+          <span class="loading-character-icon">${icon}</span>
+          <span class="loading-character-name">${escapeHtml(state.name)}</span>
+          <span class="loading-character-status">${escapeHtml(statusText)}</span>
+        </div>
+      `;
+    }).join("");
+    loadingCharacters.innerHTML = html;
+  }
+  
+  // Update steps indicator
+  if (loadingSteps) {
+    loadingSteps.textContent = `${readyCount}/${totalCount} characters loaded`;
+  }
+}
+
+function checkAllReady() {
+  const states = Array.from(loadingStates.values());
+  const allReady = states.length > 0 && states.every(s => s.ready);
+  
+  if (allReady && !allCharactersReady) {
+    allCharactersReady = true;
+    console.log("[Loading] All characters ready!");
+    
+    // Update UI status
+    updateStatus("Ready - click Start to begin");
+    
+    // Hide loading overlay - user can now click Start
+    setTimeout(() => {
+      hideLoadingOverlay();
+    }, 300);
+  }
+}
+
+function hideLoadingOverlay() {
+  if (loadingOverlay) {
+    loadingOverlay.classList.add("hidden");
+  }
+}
+
+function showLoadingOverlay() {
+  if (loadingOverlay) {
+    loadingOverlay.classList.remove("hidden");
+  }
+}
+
 async function initCharacters() {
   console.log("[initCharacters] Starting...");
   updateStatus("Loading characters...");
+  if (loadingStatus) loadingStatus.textContent = "Fetching character list...";
+  
   try {
     const resp = await fetch("/characters");
     console.log("[initCharacters] Fetch response:", resp.status);
@@ -182,6 +291,9 @@ async function initCharacters() {
 
     chatHistories.set(id, []);
     typingStates.set(id, { user: "", assistant: "" });
+    
+    // Initialize loading state for this character
+    initLoadingState(id, name);
 
     const entry = {
       id,
@@ -323,6 +435,13 @@ function handleJSONMessage(entry, { type, content }) {
     }
     if (entry.id === activeCharacterId) renderMessages();
     console.log(`[${entry.id}] Injection confirmed:`, content);
+    return;
+  }
+
+  if (type === "character_ready") {
+    // Character initialization is complete
+    console.log(`[${entry.id}] Character ready!`);
+    markCharacterReady(entry.id);
     return;
   }
 
