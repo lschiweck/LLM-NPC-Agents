@@ -106,6 +106,7 @@ if sys.platform == "win32":
 from audio_in import AudioInputProcessor
 from speech_pipeline_manager import SpeechPipelineManager
 from game_manager import GameManager
+from npc_conversation import NPCConversationOrchestrator, NPCConversationConfig, ConversationTurn
 import uvicorn
 import asyncio
 import struct
@@ -264,6 +265,122 @@ async def lifespan(app: FastAPI):
             app.state.GameManager.start()
             logger.info("🎮 Step 3: Game Manager loop started")
 
+    # Initialize NPC Conversation Orchestrator
+    app.state.NPCConversationClients: List[WebSocket] = []
+    
+    def get_npc_pipeline(character_id: str):
+        sessions: Dict[str, CharacterSession] = app.state.CharacterSessions
+        session = sessions.get(character_id)
+        if not session:
+            logger.warning(f"🎭 No session found for {character_id}. Available: {list(sessions.keys())}")
+            return None
+        if not session.pipeline:
+            logger.warning(f"🎭 Session exists for {character_id} but pipeline not initialized")
+            return None
+        return session.pipeline
+    
+    async def broadcast_npc_conv_state(state):
+        clients = app.state.NPCConversationClients
+        if not clients:
+            return
+        message = json.dumps({"type": "npc_conversation_state", **state.to_dict()})
+        disconnected = []
+        for client_ws in clients:
+            try:
+                await client_ws.send_text(message)
+            except Exception:
+                disconnected.append(client_ws)
+        for client_ws in disconnected:
+            if client_ws in clients:
+                clients.remove(client_ws)
+    
+    def on_npc_state_update(state):
+        try:
+            asyncio.create_task(broadcast_npc_conv_state(state))
+        except RuntimeError:
+            pass
+    
+    async def broadcast_npc_turn(turn: ConversationTurn, audio_bytes: bytes):
+        clients = app.state.NPCConversationClients
+        if not clients:
+            logger.warning("🎭 No NPC conversation clients connected to receive turn")
+            return
+        
+        logger.info(f"🎭 Broadcasting turn {turn.turn_number} from {turn.speaker_id} to {len(clients)} clients")
+        
+        # Send turn info as JSON first
+        turn_msg = json.dumps({
+            "type": "npc_conversation_turn",
+            "speaker_id": turn.speaker_id,
+            "message": turn.message,
+            "turn_number": turn.turn_number,
+            "is_last": turn.is_last
+        })
+        
+        # Send audio if available
+        audio_msg = None
+        if audio_bytes and len(audio_bytes) > 0:
+            # Prefix with speaker ID for client to identify
+            header = turn.speaker_id.encode('utf-8').ljust(32, b'\x00')
+            audio_msg = header + audio_bytes
+            logger.info(f"🎭 Sending {len(audio_bytes)} bytes of audio for {turn.speaker_id}")
+        else:
+            logger.warning(f"🎭 No audio data for {turn.speaker_id}")
+        
+        disconnected = []
+        for client_ws in clients:
+            try:
+                await client_ws.send_text(turn_msg)
+                if audio_msg:
+                    await client_ws.send_bytes(audio_msg)
+            except Exception as e:
+                logger.error(f"🎭 Failed to send to client: {e}")
+                disconnected.append(client_ws)
+        for client_ws in disconnected:
+            if client_ws in clients:
+                clients.remove(client_ws)
+    
+    def on_npc_turn_complete(turn: ConversationTurn, audio_bytes: bytes):
+        try:
+            asyncio.create_task(broadcast_npc_turn(turn, audio_bytes))
+        except RuntimeError:
+            pass
+    
+    app.state.NPCConversation = NPCConversationOrchestrator(
+        get_pipeline=get_npc_pipeline,
+        on_turn_complete=on_npc_turn_complete,
+        on_state_update=on_npc_state_update
+    )
+    logger.info("🎭 NPC Conversation Orchestrator initialized")
+    
+    # Helper to broadcast character connection updates to NPC conversation clients
+    async def broadcast_npc_character_update():
+        clients = app.state.NPCConversationClients
+        if not clients:
+            return
+        config = app.state.CharacterConfig
+        all_characters = list(config.keys()) if config else []
+        sessions: Dict[str, CharacterSession] = app.state.CharacterSessions
+        connected_characters = [cid for cid, session in sessions.items() if session.pipeline]
+        
+        message = json.dumps({
+            "type": "available_characters",
+            "characters": all_characters,
+            "connected": connected_characters
+        })
+        disconnected = []
+        for client_ws in clients:
+            try:
+                await client_ws.send_text(message)
+            except Exception:
+                disconnected.append(client_ws)
+        for client_ws in disconnected:
+            if client_ws in clients:
+                clients.remove(client_ws)
+    
+    # Store the broadcast function for use elsewhere
+    app.state.broadcast_npc_character_update = broadcast_npc_character_update
+
     yield
 
     logger.info("🖥️⏹️ Server shutting down")
@@ -390,6 +507,77 @@ async def game_manager_websocket(ws: WebSocket):
     finally:
         if ws in app.state.GameManagerClients:
             app.state.GameManagerClients.remove(ws)
+
+
+@app.websocket("/ws/npc_conversation")
+async def npc_conversation_websocket(ws: WebSocket):
+    """WebSocket endpoint for NPC-to-NPC conversations."""
+    await ws.accept()
+    app.state.NPCConversationClients.append(ws)
+    logger.info("🎭🔌 NPC Conversation client connected")
+    
+    # Send initial state
+    orchestrator: NPCConversationOrchestrator = app.state.NPCConversation
+    if orchestrator:
+        await ws.send_json({"type": "npc_conversation_state", **orchestrator.get_state().to_dict()})
+    
+    # Send available characters (from config)
+    config = app.state.CharacterConfig
+    all_characters = list(config.keys()) if config else []
+    
+    # Also send which characters are currently connected (have active sessions with pipelines)
+    sessions: Dict[str, CharacterSession] = app.state.CharacterSessions
+    connected_characters = [cid for cid, session in sessions.items() if session.pipeline]
+    
+    await ws.send_json({
+        "type": "available_characters", 
+        "characters": all_characters,
+        "connected": connected_characters
+    })
+    logger.info(f"🎭 NPC Conv client connected. Characters: {all_characters}, Connected: {connected_characters}")
+    
+    try:
+        while True:
+            data = await ws.receive_json()
+            msg_type = data.get("type")
+            
+            if msg_type == "start_conversation" and orchestrator:
+                npc1 = data.get("npc1_id", "").strip()
+                npc2 = data.get("npc2_id", "").strip()  # Can be empty for monologue
+                turns = int(data.get("turns", 2))
+                context = data.get("context", "").strip()
+                
+                if not npc1:
+                    await ws.send_json({"type": "error", "message": "NPC 1 is required"})
+                    continue
+                
+                config = NPCConversationConfig(
+                    npc1_id=npc1,
+                    npc2_id=npc2 if npc2 else None,
+                    total_turns=max(1, min(turns, 20)),  # Limit 1-20 turns
+                    context=context
+                )
+                
+                success = await orchestrator.start_conversation(config)
+                if not success:
+                    await ws.send_json({
+                        "type": "error", 
+                        "message": orchestrator.state.error or "Failed to start conversation"
+                    })
+                    
+            elif msg_type == "stop_conversation" and orchestrator:
+                orchestrator.stop_conversation()
+                
+            elif msg_type == "reset" and orchestrator:
+                orchestrator.reset()
+                await ws.send_json({"type": "npc_conversation_state", **orchestrator.get_state().to_dict()})
+                
+    except Exception as e:
+        logger.info(f"🎭🔌 NPC Conversation client disconnected: {e}")
+    finally:
+        if ws in app.state.NPCConversationClients:
+            app.state.NPCConversationClients.remove(ws)
+
 
 # --------------------------------------------------------------------
 # Utility functions
@@ -1232,6 +1420,10 @@ async def websocket_endpoint(ws: WebSocket):
         "type": "character_ready",
         "character_id": character_id
     })
+    
+    # Notify NPC conversation clients about updated character list
+    if hasattr(app.state, 'broadcast_npc_character_update'):
+        await app.state.broadcast_npc_character_update()
 
     try:
         # Wait for any task to complete (e.g., client disconnect)
