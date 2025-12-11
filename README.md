@@ -7,7 +7,9 @@ The technical **core (audio streaming, STT, TTS, WebSocket structure)** is based
 
 ---
 
-**AI backend for embodied agents** – Create immersive environments where NPCs can talk to players and converse with each other, while an AI Game Manager injects context and drives the storyline in the background. Supports **agent-to-player dialogue**, **agent-to-agent conversations**, and **dynamic context injection** – all with real-time voice via STT/TTS. Includes Unity integration scripts; the WebSocket-based architecture works with any platform.
+**Real-time voice AI backend for embodied agents** – No text boxes, just natural speech. Create immersive environments where NPCs can talk to players and converse with each other, while an AI Game Manager injects context and drives the storyline in the background. Supports **agent-to-player dialogue**, **agent-to-agent conversations**, and **dynamic context injection** – all through real-time voice (STT + LLM + TTS). Includes Unity integration scripts; the WebSocket-based architecture works with any platform.
+
+🖥️ **Designed to run locally** – All processing (speech recognition, LLM inference, voice synthesis) can run on your machine. No cloud APIs required by default, though they can be used if preferred (see [KoljaB/RealtimeVoiceChat](https://github.com/KoljaB/RealtimeVoiceChat) for cloud options).
 
 ![LLM NPCs Demo](example.png)
 
