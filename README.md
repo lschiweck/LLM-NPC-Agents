@@ -1,17 +1,19 @@
-# LLM NPCs – Intelligent Context-Aware AI Agents for Unity
+# LLM NPC Agents – Real-Time Voice AI Backend
+
+> 🚧 **Early Release** – Feedback welcome! This project is under active development. Please report issues and suggestions.
 
 **Note:** This project is a **modified version** of [KoljaB/RealtimeVoiceChat](https://github.com/KoljaB/RealtimeVoiceChat).  
 The technical **core (audio streaming, STT, TTS, WebSocket structure)** is based on that project, but the backend has been significantly expanded to support **multi-NPC interaction**, **Game Manager story orchestration**, and **dynamic context injection**.
 
 ---
 
-**Intelligent agent-based NPCs for Unity** – Create context-aware characters that dynamically respond to game events, follow evolving storylines, and interact naturally through real-time voice conversation.
+**AI backend for embodied agents** – Create immersive environments where NPCs can talk to players and converse with each other, while an AI Game Manager injects context and drives the storyline in the background. Supports **agent-to-player dialogue**, **agent-to-agent conversations**, and **dynamic context injection** – all with real-time voice via STT/TTS. Includes Unity integration scripts; the WebSocket-based architecture works with any platform.
 
 ![LLM NPCs Demo](example.png)
 
 ## What This Project Does
 
-This system enables **intelligent NPC agents** in Unity that go beyond simple chatbots:
+This system provides the **AI backend for intelligent NPCs** that go beyond simple chatbots:
 
 - 🎮 **Game Manager AI** – An invisible "game master" that orchestrates the story in the background, analyzes player actions, and dynamically injects instructions into NPCs to shape their behavior
 - 🧠 **Context-Aware NPCs** – Characters that understand game state, react to player discoveries, and adapt their responses based on injected game context
@@ -53,6 +55,7 @@ The system consists of two main components:
 - [Character Configuration](#character-configuration)
 - [🎮 Game Manager LLM](#-game-manager-llm)
 - [💉 System Prompt Injection](#-system-prompt-injection)
+- [🗣️ NPC-to-NPC Cnoversations](#️-npc-to-npc-conversations)
 - [⚡ Performance: Global Generation Lock](#-performance-global-generation-lock)
 - [Unity Integration](#unity-integration)
   - [Prerequisites](#prerequisites)
@@ -475,6 +478,87 @@ Injections are added to the character's system prompt:
 
 ---
 
+## 🗣️ NPC-to-NPC Conversations
+
+NPCs can have conversations with each other, creating dynamic inter-character dialogue that the player can witness.
+
+### Features
+
+- **Configurable Turns**: Set how many exchanges the NPCs should have
+- **Context Injection**: Provide a topic or scenario for them to discuss
+- **Graceful Endings**: NPCs naturally conclude their conversation
+- **Shared Context**: NPCs remember these conversations when talking to the player
+- **Player Interruption**: Starting to speak automatically stops NPC conversations
+
+### Web UI Controls
+
+The NPC Conversation Panel allows you to:
+- **Select NPCs**: Choose which two characters should converse
+- **Set Turns**: Configure how many back-and-forth exchanges
+- **Inject Context**: Give them a topic (e.g., "Discuss what happened last night")
+- **Start/Stop**: Control the conversation flow
+- **View Transcript**: Watch the conversation unfold in real-time
+
+### Context Awareness
+
+When NPCs converse, both characters remember the conversation:
+
+```
+Lisa talks to Paul → Stored in Lisa's inter_npc_history["PaulAdams"]
+                  → Stored in Paul's inter_npc_history["LisaParker"]
+```
+
+When the player later talks to Lisa, she has full context:
+
+```
+Player: "What were you and Paul talking about?"
+Lisa: "Oh, we were just discussing last night's events..."
+```
+
+This creates a coherent world where:
+- NPCs have relationships and shared history
+- Players can reference overheard conversations
+- The narrative feels interconnected and alive
+
+### Player Interruption
+
+When the player starts speaking:
+1. Any running NPC-to-NPC conversation stops immediately
+2. The interrupted NPC gives full attention to the player
+3. The conversation context is preserved for future reference
+
+### Programmatic Control
+
+Via WebSocket to `/ws/npc_conversation`:
+
+**Start Conversation**:
+```json
+{
+  "type": "start",
+  "npc1": "LisaParker",
+  "npc2": "PaulAdams",
+  "turns": 5,
+  "context": "Discuss your alibis for last night"
+}
+```
+
+**Stop Conversation**:
+```json
+{
+  "type": "stop"
+}
+```
+
+**Server Events**:
+```json
+{"type": "npc_conv_state", "state": "running", "current_turn": 2, "max_turns": 5}
+{"type": "npc_conv_turn", "speaker": "LisaParker", "message": "I was at home...", "turn": 1}
+{"type": "npc_conv_audio", "speaker": "LisaParker", "audio": "[Base64 PCM]"}
+{"type": "npc_conv_state", "state": "finished"}
+```
+
+---
+
 ## ⚡ Performance: Global Generation Lock
 
 With multiple "warm" NPC sessions, a global lock prevents LLM+TTS from running simultaneously for multiple characters. This:
@@ -750,18 +834,19 @@ RealtimeVoice/
 │   ├── code/
 │   │   ├── server.py                  # FastAPI WebSocket Server
 │   │   ├── speech_pipeline_manager.py # LLM + TTS Orchestration
-│   │   ├── game_manager.py            # 🎮 Game Manager LLM (NEW)
+│   │   ├── game_manager.py            # 🎮 Game Manager LLM
+│   │   ├── npc_conversation.py        # 🗣️ NPC-to-NPC Conversation Orchestrator
 │   │   ├── audio_in.py                # Audio input processing
 │   │   ├── audio_module.py            # TTS engine abstraction
 │   │   ├── llm_module.py              # LLM backend abstraction
 │   │   ├── transcribe.py              # STT configuration
 │   │   ├── turndetect.py              # Speech pause detection
 │   │   ├── character_config.json      # Character definitions
-│   │   ├── game_manager_config.json   # 🎮 Game Manager Config (NEW)
+│   │   ├── game_manager_config.json   # 🎮 Game Manager Config
 │   │   ├── system_prompt.txt          # Default system prompt
 │   │   └── static/                    # Web interface
-│   │       ├── index.html             # UI with Game Manager Panel
-│   │       ├── app.js                 # Client logic + GM integration
+│   │       ├── index.html             # UI with NPC Conversation Panel
+│   │       ├── app.js                 # Client logic + NPC conv integration
 │   │       └── ...
 │   │
 │   ├── requirements.txt               # Python dependencies
