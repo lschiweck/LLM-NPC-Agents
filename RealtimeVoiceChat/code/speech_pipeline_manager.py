@@ -860,11 +860,13 @@ class SpeechPipelineManager:
 
         try:
             logger.info(f"🗣️🧠🚀 [Gen {new_gen_id}] Calling LLM generate...")
-            # TODO: Update history management if needed
-            # self.history.append({"role": "user", "content": txt}) # Example history update
+            
+            # Build combined history including NPC-to-NPC conversations
+            combined_history = self._build_combined_history()
+            
             self.running_generation.llm_generator = self.llm.generate(
                 text=txt,
-                history=self.history, # Pass current history
+                history=combined_history,
                 use_system_prompt=True,
             )
             logger.info(f"🗣️🧠✔️ [Gen {new_gen_id}] LLM generator created. Setting generator ready event.")
@@ -1102,6 +1104,45 @@ class SpeechPipelineManager:
         self.history = []
         self.inter_npc_history = {}
         logger.info("🗣️🧹 History cleared. Reset complete.")
+
+    def _build_combined_history(self) -> List[dict]:
+        """
+        Build combined history including NPC-to-NPC conversations.
+        
+        The player witnesses NPC-to-NPC conversations in the game, so this character
+        should remember what they discussed with other NPCs when talking to the player.
+        
+        Returns:
+            Combined history list for LLM context.
+        """
+        combined = []
+        
+        # First, add context about NPC-to-NPC conversations (if any)
+        if self.inter_npc_history:
+            npc_context_parts = []
+            for other_npc_id, messages in self.inter_npc_history.items():
+                if messages:
+                    # Format the conversation with the other NPC
+                    convo_summary = []
+                    for msg in messages[-10:]:  # Last 10 messages max per NPC
+                        if msg.get("role") == "assistant":
+                            convo_summary.append(f"You said: {msg['content']}")
+                        else:
+                            convo_summary.append(f"{other_npc_id} said: {msg['content']}")
+                    
+                    if convo_summary:
+                        npc_context_parts.append(f"[Your recent conversation with {other_npc_id}:\n" + "\n".join(convo_summary) + "]")
+            
+            if npc_context_parts:
+                # Add as a system-like context message at the start
+                context_msg = "[CONTEXT - The player witnessed these conversations you had with other characters. You remember them and can reference them naturally:]\n\n" + "\n\n".join(npc_context_parts)
+                combined.append({"role": "user", "content": context_msg})
+                combined.append({"role": "assistant", "content": "I understand and remember these conversations."})
+        
+        # Then add the player conversation history
+        combined.extend(self.history)
+        
+        return combined
 
     def inject(self, content: str) -> str:
         """

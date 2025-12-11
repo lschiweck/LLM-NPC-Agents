@@ -958,15 +958,16 @@ class TranscriptionCallbacks:
     `message_queue` and manages interaction logic like interruptions and final answer delivery.
     It also includes a threaded worker to handle abort checks based on partial transcription.
     """
-    def __init__(self, session: CharacterSession):
+    def __init__(self, session: CharacterSession, stop_npc_conversation: Optional[Callable] = None):
         """
         Initializes the TranscriptionCallbacks instance for a WebSocket connection.
 
         Args:
-            app: The FastAPI application instance (to access global components).
-            message_queue: An asyncio queue for sending messages back to the client.
+            session: The character session this callback belongs to.
+            stop_npc_conversation: Optional callback to stop NPC-to-NPC conversations when player speaks.
         """
         self.session = session
+        self.stop_npc_conversation = stop_npc_conversation
         if session.message_queue is None:
             session.message_queue = asyncio.Queue()
         self.message_queue = session.message_queue
@@ -1222,8 +1223,17 @@ class TranscriptionCallbacks:
         If client-side TTS is playing, it triggers an interruption: stops server-side
         TTS streaming, sends stop/interruption messages to the client, aborts ongoing
         generation, sends any final assistant answer generated so far, and resets relevant state.
+        
+        Also stops any ongoing NPC-to-NPC conversations since the player is now speaking.
         """
         logger.info(f"{Colors.ORANGE}🖥️🎙️ Recording started.{Colors.RESET} TTS Client Playing: {self.tts_client_playing}")
+        
+        # Stop NPC conversation if one is running - player is now speaking
+        if self.stop_npc_conversation:
+            try:
+                self.stop_npc_conversation()
+            except Exception as e:
+                logger.warning(f"🖥️⚠️ Failed to stop NPC conversation: {e}")
         # Use connection-specific tts_client_playing flag
         if self.tts_client_playing:
             self.tts_to_client = False # Stop server sending TTS
@@ -1391,7 +1401,14 @@ async def websocket_endpoint(ws: WebSocket):
     audio_chunks = session.audio_queue or asyncio.Queue()
     session.audio_queue = audio_chunks
 
-    callbacks = TranscriptionCallbacks(session)
+    # Create stop function for NPC conversations
+    def stop_npc_conv():
+        npc_conv = getattr(app.state, 'NPCConversation', None)
+        if npc_conv and hasattr(npc_conv, 'state') and npc_conv.state.state == "running":
+            logger.info("🖥️🛑 Stopping NPC conversation - player is speaking")
+            npc_conv.stop_conversation()
+    
+    callbacks = TranscriptionCallbacks(session, stop_npc_conversation=stop_npc_conv)
 
     # Wire callbacks to the session-specific processors
     session.audio_input.realtime_callback = callbacks.on_partial
