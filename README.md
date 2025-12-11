@@ -221,9 +221,9 @@ docker compose down
 
 ## Setting Up Ollama
 
-Ollama is the default LLM backend. It can run locally or in WSL.
+Ollama is the default LLM backend. We recommend running it in WSL.
 
-### Installation (Windows with WSL)
+### Installation (WSL)
 
 ```bash
 # In WSL (Ubuntu):
@@ -233,11 +233,14 @@ curl -fsSL https://ollama.com/install.sh | sh
 ollama pull llama3
 ```
 
-### Installation (Windows native)
+### Starting Ollama
 
-1. Download installer from https://ollama.com/download
-2. Install and reopen terminal
-3. Run `ollama pull llama3`
+```bash
+# Start the Ollama server (in WSL):
+ollama serve
+```
+
+Keep this terminal open while using the application.
 
 ### Check if Ollama is Running
 
@@ -250,17 +253,22 @@ ollama list
 
 ### Environment Variables (optional)
 
-```powershell
+```bash
 # If Ollama runs on different port/host:
-$env:OLLAMA_BASE_URL = "http://127.0.0.1:11434"
+export OLLAMA_BASE_URL="http://127.0.0.1:11434"
 
 # Use different model:
-$env:DEFAULT_LLM_MODEL = "llama3"
+export DEFAULT_LLM_MODEL="llama3"
 ```
 
 ---
 
 ## Starting the Server
+
+> ⚠️ **Before starting:** Make sure Ollama is running first! If not using Docker, start Ollama in a separate WSL terminal:
+> ```bash
+> ollama serve
+> ```
 
 ### With Conda
 
