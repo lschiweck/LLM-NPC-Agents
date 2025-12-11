@@ -1,59 +1,59 @@
-# LLM NPCs – Echtzeit-Sprachkonversation mit KI
+# LLM NPCs – Real-Time Voice Conversation with AI
 
-**Hinweis:** Dieses Projekt ist eine **stark veränderte Version** von [KoljaB/RealtimeVoiceChat](https://github.com/KoljaB/RealtimeVoiceChat).  
-Der technische **Core (Audio-Streaming, STT, TTS, WebSocket-Struktur)** basiert auf diesem Projekt, der Backend-Teil wurde jedoch deutlich erweitert und speziell für **Multi-LLM-NPC-Interaktionen** angepasst.
+**Note:** This project is a **heavily modified version** of [KoljaB/RealtimeVoiceChat](https://github.com/KoljaB/RealtimeVoiceChat).  
+The technical **core (audio streaming, STT, TTS, WebSocket structure)** is based on that project, but the backend has been significantly expanded and specifically adapted for **multi-LLM-NPC interactions**.
 
-**Natürliche Sprachkonversationen mit mehreren LLM-gestützten NPCs in Echtzeit.**
+**Natural voice conversations with multiple LLM-powered NPCs in real-time.**
 
 ![LLM NPCs Demo](example.png)
 
-Im Gegensatz zum Originalprojekt fokussiert sich diese Variante darauf, **mehrere eigenständige NPC-Charaktere** parallel zu betreiben, die:
+Unlike the original project, this variant focuses on running **multiple independent NPC characters** in parallel, which:
 
-- eigene System-Prompts, Wissensstände und Rollen besitzen,
-- in einer gemeinsamen Szene miteinander und mit dem User interagieren können,
-- über den Unity-Client gezielt angesprochen, aktiviert oder kombiniert werden können (z. B. Dialoge zwischen NPCs, Moderation durch den Spieler, Rollenwechsel).
+- have their own system prompts, knowledge bases, and roles,
+- can interact with each other and with the user in a shared scene,
+- can be specifically addressed, activated, or combined via the Unity client (e.g., dialogues between NPCs, moderation by the player, role changes).
 
-Damit eignet sich dieses Projekt besonders für **VR-/Game-Szenarien**, in denen nicht nur ein einzelner Assistent, sondern ein ganzes **Ensemble von LLM-NPCs** dynamisch und sprachbasiert gesteuert werden soll.
+This makes this project particularly suitable for **VR/game scenarios** where not just a single assistant, but an entire **ensemble of LLM NPCs** needs to be dynamically and voice-controlled.
 
-Dieses Projekt ermöglicht es, per Sprache mit KI-Charakteren zu kommunizieren. Die Antworten werden in nahezu Echtzeit als synthetisierte Sprache zurückgegeben. Es besteht aus zwei Hauptkomponenten:
+This project enables communication with AI characters via voice. Responses are returned as synthesized speech in near real-time. It consists of two main components:
 
-1. **Backend (Python/FastAPI)** – Speech-to-Text, LLM-Inferenz, Text-to-Speech
-2. **Unity-Client (C#)** – Integration in VR/3D-Anwendungen
+1. **Backend (Python/FastAPI)** – Speech-to-Text, LLM inference, Text-to-Speech
+2. **Unity Client (C#)** – Integration into VR/3D applications
 
 ---
 
-## Inhaltsverzeichnis
+## Table of Contents
 
-- [Architektur-Überblick](#architektur-überblick)
-- [Systemanforderungen](#systemanforderungen)
+- [Architecture Overview](#architecture-overview)
+- [System Requirements](#system-requirements)
 - [Installation](#installation)
-  - [Option A: Conda-Umgebung (empfohlen für Entwicklung)](#option-a-conda-umgebung-empfohlen-für-entwicklung)
-  - [Option B: Docker (empfohlen für Deployment)](#option-b-docker-empfohlen-für-deployment)
-- [Ollama einrichten](#ollama-einrichten)
-- [Server starten](#server-starten)
-- [Charakter-Konfiguration](#charakter-konfiguration)
+  - [Option A: Conda Environment (recommended for development)](#option-a-conda-environment-recommended-for-development)
+  - [Option B: Docker (recommended for deployment)](#option-b-docker-recommended-for-deployment)
+- [Setting Up Ollama](#setting-up-ollama)
+- [Starting the Server](#starting-the-server)
+- [Character Configuration](#character-configuration)
 - [🎮 Game Manager LLM](#-game-manager-llm)
-- [💉 System-Prompt-Injection](#-system-prompt-injection)
+- [💉 System Prompt Injection](#-system-prompt-injection)
 - [⚡ Performance: Global Generation Lock](#-performance-global-generation-lock)
-- [Unity-Integration](#unity-integration)
-  - [Voraussetzungen](#voraussetzungen)
-  - [Skript-Übersicht](#skript-übersicht)
-  - [Einrichtung in Unity](#einrichtung-in-unity)
-  - [Beispiel: Eigenen Charakter erstellen](#beispiel-eigenen-charakter-erstellen)
-- [Datenfluss & Protokoll](#datenfluss--protokoll)
-- [Fehlerbehebung](#fehlerbehebung)
-- [Projektstruktur](#projektstruktur)
+- [Unity Integration](#unity-integration)
+  - [Prerequisites](#prerequisites)
+  - [Script Overview](#script-overview)
+  - [Setup in Unity](#setup-in-unity)
+  - [Example: Creating Your Own Character](#example-creating-your-own-character)
+- [Data Flow & Protocol](#data-flow--protocol)
+- [Troubleshooting](#troubleshooting)
+- [Project Structure](#project-structure)
 
 ---
 
-## Architektur-Überblick
+## Architecture Overview
 
 ```
 ┌──────────────────────────────────────────────────────────────────────────────┐
 │                              UNITY CLIENT                                    │
 │  ┌─────────────────┐    ┌──────────────────┐    ┌─────────────────────────┐  │
 │  │ LiveLlmManager  │───▶│ LiveLlmCharacter │───▶│ AudioSource (Playback)  │  │
-│  │ (Mikrofon)      │    │ (WebSocket)      │    │                         │  │
+│  │ (Microphone)    │    │ (WebSocket)      │    │                         │  │
 │  └────────┬────────┘    └──────────────────┘    └─────────────────────────┘  │
 │           │                      ▲                                           │
 └───────────┼──────────────────────┼───────────────────────────────────────────┘
@@ -73,85 +73,85 @@ Dieses Projekt ermöglicht es, per Sprache mit KI-Charakteren zu kommunizieren. 
 └─────────────────────────────────────────────────────────────────────────────┘
 ```
 
-### Ablauf einer Konversation
+### Conversation Flow
 
-1. **Sprachaufnahme**: Unity nimmt Mikrofon-Audio auf (48kHz, Mono, 16-bit PCM)
-2. **Streaming**: Audio-Chunks werden via WebSocket an den Server gesendet
-3. **Speech-to-Text**: `RealtimeSTT` wandelt Sprache in Text um (Whisper-basiert)
-4. **LLM-Inferenz**: Der Text wird an Ollama/OpenAI gesendet, Antwort wird gestreamt
-5. **Text-to-Speech**: `RealtimeTTS` synthetisiert die Antwort (Kokoro/Coqui/Orpheus)
-6. **Audio-Streaming**: TTS-Chunks werden als Base64-kodiertes PCM zurückgesendet
-7. **Wiedergabe**: Unity dekodiert und spielt die Antwort ab
+1. **Voice Recording**: Unity captures microphone audio (48kHz, Mono, 16-bit PCM)
+2. **Streaming**: Audio chunks are sent to the server via WebSocket
+3. **Speech-to-Text**: `RealtimeSTT` converts speech to text (Whisper-based)
+4. **LLM Inference**: The text is sent to Ollama/OpenAI, response is streamed
+5. **Text-to-Speech**: `RealtimeTTS` synthesizes the response (Kokoro/Coqui/Orpheus)
+6. **Audio Streaming**: TTS chunks are sent back as Base64-encoded PCM
+7. **Playback**: Unity decodes and plays back the response
 
 ---
 
-## Systemanforderungen
+## System Requirements
 
-| Komponente | Anforderung |
-|------------|-------------|
-| **Betriebssystem** | Windows 10/11, Linux (Ubuntu 22.04+) |
-| **Python** | 3.10 oder 3.11 (nicht 3.12+) |
-| **GPU** | NVIDIA mit CUDA 12.1+ (empfohlen, mindestens 8GB VRAM) |
-| **RAM** | Mindestens 16GB |
-| **Unity** | 2021.3 LTS oder neuer |
+| Component | Requirement |
+|-----------|-------------|
+| **Operating System** | Windows 10/11, Linux (Ubuntu 22.04+) |
+| **Python** | 3.10 or 3.11 (not 3.12+) |
+| **GPU** | NVIDIA with CUDA 12.1+ (recommended, minimum 8GB VRAM) |
+| **RAM** | Minimum 16GB |
+| **Unity** | 2021.3 LTS or newer |
 
-> ⚠️ **Wichtig**: Ohne NVIDIA-GPU ist die Performance stark eingeschränkt. STT und TTS laufen dann auf der CPU, was zu spürbarer Latenz führt.
+> ⚠️ **Important**: Without an NVIDIA GPU, performance is significantly limited. STT and TTS will run on CPU, resulting in noticeable latency.
 
 ---
 
 ## Installation
 
-### Option A: Conda-Umgebung (empfohlen für Entwicklung)
+### Option A: Conda Environment (recommended for development)
 
-#### 1. Conda-Umgebung erstellen
+#### 1. Create Conda Environment
 
 ```powershell
-# Neue Umgebung mit Python 3.10 erstellen
+# Create new environment with Python 3.10
 conda create -n realtime-voice python=3.10 -y
 
-# Umgebung aktivieren
+# Activate environment
 conda activate realtime-voice
 ```
 
-#### 2. In das Code-Verzeichnis wechseln
+#### 2. Navigate to the Code Directory
 
 ```powershell
 cd RealtimeVoiceChat/code
 ```
 
-#### 3. PyTorch installieren (GPU-Version)
+#### 3. Install PyTorch (GPU Version)
 
 ```powershell
-# Für NVIDIA GPU mit CUDA 12.1
+# For NVIDIA GPU with CUDA 12.1
 pip install torch==2.5.1+cu121 torchaudio==2.5.1+cu121 torchvision --index-url https://download.pytorch.org/whl/cu121
 ```
 
-Für andere CUDA-Versionen siehe: https://pytorch.org/get-started/previous-versions/
+For other CUDA versions see: https://pytorch.org/get-started/previous-versions/
 
-#### 4. Abhängigkeiten installieren
+#### 4. Install Dependencies
 
 ```powershell
 pip install -r requirements.txt
 ```
 
-#### 5. Umgebung für spätere Nutzung
+#### 5. Environment for Later Use
 
 ```powershell
-# Zum erneuten Aktivieren:
+# To reactivate:
 conda activate realtime-voice
 cd RealtimeVoiceChat/code
 ```
 
 ---
 
-### Option B: Docker (empfohlen für Deployment)
+### Option B: Docker (recommended for deployment)
 
-Docker kapselt alle Abhängigkeiten und ist ideal für Linux-Server mit GPU.
+Docker encapsulates all dependencies and is ideal for Linux servers with GPU.
 
-#### 1. NVIDIA Container Toolkit installieren (nur Linux)
+#### 1. Install NVIDIA Container Toolkit (Linux only)
 
 ```bash
-# Installation für Ubuntu
+# Installation for Ubuntu
 distribution=$(. /etc/os-release;echo $ID$VERSION_ID)
 curl -s -L https://nvidia.github.io/nvidia-docker/gpgkey | sudo apt-key add -
 curl -s -L https://nvidia.github.io/nvidia-docker/$distribution/nvidia-docker.list | \
@@ -161,38 +161,38 @@ sudo apt-get install -y nvidia-container-toolkit
 sudo systemctl restart docker
 ```
 
-#### 2. Images bauen
+#### 2. Build Images
 
 ```bash
 cd RealtimeVoiceChat
 docker compose build
 ```
 
-> ⏱️ **Hinweis**: Der erste Build kann 15-30 Minuten dauern (Downloads, Model-Caching).
+> ⏱️ **Note**: The first build can take 15-30 minutes (downloads, model caching).
 
-#### 3. Container starten
+#### 3. Start Containers
 
 ```bash
 docker compose up -d
 ```
 
-#### 4. Ollama-Modell laden (einmalig nach Start)
+#### 4. Load Ollama Model (once after start)
 
 ```bash
 docker compose exec ollama ollama pull llama3
 ```
 
-#### 5. Logs prüfen
+#### 5. Check Logs
 
 ```bash
-# App-Logs
+# App logs
 docker compose logs -f app
 
-# Ollama-Logs
+# Ollama logs
 docker compose logs -f ollama
 ```
 
-#### 6. Container stoppen
+#### 6. Stop Containers
 
 ```bash
 docker compose down
@@ -200,84 +200,84 @@ docker compose down
 
 ---
 
-## Ollama einrichten
+## Setting Up Ollama
 
-Ollama ist der Standard-LLM-Backend. Es kann lokal oder in WSL laufen.
+Ollama is the default LLM backend. It can run locally or in WSL.
 
-### Installation (Windows mit WSL)
+### Installation (Windows with WSL)
 
 ```bash
 # In WSL (Ubuntu):
 curl -fsSL https://ollama.com/install.sh | sh
 
-# Modell herunterladen:
+# Download model:
 ollama pull llama3
 ```
 
-### Installation (Windows nativ)
+### Installation (Windows native)
 
-1. Installer von https://ollama.com/download herunterladen
-2. Installieren und Terminal neu öffnen
-3. `ollama pull llama3` ausführen
+1. Download installer from https://ollama.com/download
+2. Install and reopen terminal
+3. Run `ollama pull llama3`
 
-### Prüfen ob Ollama läuft
+### Check if Ollama is Running
 
 ```bash
-# Sollte ohne Fehler funktionieren:
+# Should work without errors:
 ollama list
 
-# Bei "address already in use" läuft Ollama bereits im Hintergrund
+# If "address already in use", Ollama is already running in the background
 ```
 
-### Umgebungsvariablen (optional)
+### Environment Variables (optional)
 
 ```powershell
-# Falls Ollama auf anderem Port/Host läuft:
+# If Ollama runs on different port/host:
 $env:OLLAMA_BASE_URL = "http://127.0.0.1:11434"
 
-# Anderes Modell verwenden:
+# Use different model:
 $env:DEFAULT_LLM_MODEL = "llama3"
 ```
 
 ---
 
-## Server starten
+## Starting the Server
 
-### Mit Conda
+### With Conda
 
 ```powershell
-# Umgebung aktivieren (falls noch nicht aktiv)
+# Activate environment (if not already active)
 conda activate realtime-voice
 
-# In Code-Verzeichnis wechseln
+# Navigate to code directory
 cd RealtimeVoiceChat/code
 
-# Server starten
+# Start server
 python server.py
 ```
 
-Der Server läuft dann auf `http://localhost:8000`.
+The server will then run on `http://localhost:8000`.
 
-### Mit Docker
+### With Docker
 
 ```bash
-# Falls noch nicht gestartet:
+# If not already started:
 docker compose up -d
 
-# Server läuft automatisch auf Port 8000
+# Server runs automatically on port 8000
 ```
 
-### Web-Interface testen
+### Testing the Web Interface
 
-1. Browser öffnen: `http://localhost:8000`
-2. Mikrofon-Berechtigung erteilen
-3. "Start" klicken und sprechen
+1. Open browser: `http://localhost:8000`
+2. Grant microphone permission
+3. Click "Start" and speak
 
 ---
 
-## Charakter-Konfiguration
+## Character Configuration
 
-Charaktere werden in `RealtimeVoiceChat/code/character_config.json` definiert:
+Characters are defined in `RealtimeVoiceChat/code/character_config.json`:
 
 ```json
 {
@@ -286,7 +286,7 @@ Charaktere werden in `RealtimeVoiceChat/code/character_config.json` definiert:
     "tts_engine": "kokoro",
     "voice": "af_heart",
     "reference_audio": "reference_audio.wav",
-    "system_prompt": "Du bist Lisa Parker...",
+    "system_prompt": "You are Lisa Parker...",
     "persist_history": false,
     "history": []
   },
@@ -294,54 +294,54 @@ Charaktere werden in `RealtimeVoiceChat/code/character_config.json` definiert:
     "display_name": "Paul Adams",
     "tts_engine": "kokoro",
     "voice": "am_fenrir",
-    "system_prompt": "Du bist Paul Adams...",
+    "system_prompt": "You are Paul Adams...",
     "persist_history": false,
     "history": []
   }
 }
 ```
 
-### Konfigurations-Optionen
+### Configuration Options
 
-| Feld | Beschreibung | Beispiel |
-|------|--------------|----------|
-| `display_name` | Anzeigename | `"Lisa Parker"` |
-| `tts_engine` | TTS-Engine | `"kokoro"`, `"coqui"`, `"orpheus"` |
-| `voice` | Stimmen-ID | `"af_heart"` (Kokoro), `"v2/de_DE/..."` (Coqui) |
-| `reference_audio` | Audio für Voice-Cloning | `"meine_stimme.wav"` |
-| `system_prompt` | Charakter-Persönlichkeit | Beliebiger Text |
-| `llm_provider` | LLM-Backend (optional) | `"ollama"`, `"openai"` |
-| `llm_model` | Modellname (optional) | `"llama3"`, `"gpt-4"` |
-| `persist_history` | Historie speichern | `true`/`false` |
-| `history` | Vorgeladene Historie | `[{"role": "user", "content": "..."}]` |
+| Field | Description | Example |
+|-------|-------------|---------|
+| `display_name` | Display name | `"Lisa Parker"` |
+| `tts_engine` | TTS engine | `"kokoro"`, `"coqui"`, `"orpheus"` |
+| `voice` | Voice ID | `"af_heart"` (Kokoro), `"v2/de_DE/..."` (Coqui) |
+| `reference_audio` | Audio for voice cloning | `"my_voice.wav"` |
+| `system_prompt` | Character personality | Any text |
+| `llm_provider` | LLM backend (optional) | `"ollama"`, `"openai"` |
+| `llm_model` | Model name (optional) | `"llama3"`, `"gpt-4"` |
+| `persist_history` | Save history | `true`/`false` |
+| `history` | Preloaded history | `[{"role": "user", "content": "..."}]` |
 
-### TTS-Engine-Stimmen
+### TTS Engine Voices
 
-**Kokoro** (schnell, gute Qualität):
-- `af_heart`, `af_bella`, `af_sarah` (weiblich)
-- `am_adam`, `am_fenrir`, `am_michael` (männlich)
+**Kokoro** (fast, good quality):
+- `af_heart`, `af_bella`, `af_sarah` (female)
+- `am_adam`, `am_fenrir`, `am_michael` (male)
 
-**Coqui** (beste Qualität, langsamer):
-- Unterstützt Voice-Cloning mit `reference_audio`
+**Coqui** (best quality, slower):
+- Supports voice cloning with `reference_audio`
 
-**Orpheus** (experimentell):
-- Benötigt separates Modell
+**Orpheus** (experimental):
+- Requires separate model
 
 ---
 
 ## 🎮 Game Manager LLM
 
-Der Game Manager ist ein KI-"Spielleiter", der im Hintergrund läuft und die Story orchestriert.
+The Game Manager is an AI "game master" that runs in the background and orchestrates the story.
 
 ### Features
 
-- **Periodische Analyse**: Läuft alle X Sekunden (konfigurierbar, Standard: 30s)
-- **Konversations-Zugriff**: Hat Zugriff auf alle NPC-Gesprächsverläufe
-- **Dynamische Injektionen**: Kann Instruktionen in beliebige Charaktere injizieren
-- **Game Clues**: Akzeptiert Hinweise vom Spiel (z.B. "Spieler hat Beweis gefunden")
-- **Web-UI Panel**: Echtzeit-Status, Timer und Steuerung
+- **Periodic Analysis**: Runs every X seconds (configurable, default: 30s)
+- **Conversation Access**: Has access to all NPC conversation histories
+- **Dynamic Injections**: Can inject instructions into any character
+- **Game Clues**: Accepts hints from the game (e.g., "Player found evidence")
+- **Web UI Panel**: Real-time status, timer, and controls
 
-### Konfiguration (`game_manager_config.json`)
+### Configuration (`game_manager_config.json`)
 
 ```json
 {
@@ -349,179 +349,179 @@ Der Game Manager ist ein KI-"Spielleiter", der im Hintergrund läuft und die Sto
   "tick_interval_seconds": 30,
   "llm_provider": "ollama",
   "llm_model": "llama3",
-  "story_context": "Dies ist ein interaktiver Krimi. Der Spieler ist ein Detektiv.",
+  "story_context": "This is an interactive mystery. The player is a detective.",
   "known_characters": ["LisaParker", "PaulAdams"],
-  "system_prompt": "Du bist der unsichtbare Spielleiter eines interaktiven Krimis..."
+  "system_prompt": "You are the invisible game master of an interactive mystery..."
 }
 ```
 
-### Konfigurations-Optionen
+### Configuration Options
 
-| Feld | Beschreibung | Standard |
-|------|--------------|----------|
-| `enabled` | Game Manager aktivieren/deaktivieren | `true` |
-| `tick_interval_seconds` | Zeit zwischen Analyse-Zyklen | `30` |
-| `llm_provider` | LLM-Backend für GM | `"ollama"` |
-| `llm_model` | Modell für GM | `"llama3"` |
-| `story_context` | Hintergrund-Story-Info | `""` |
-| `known_characters` | Liste der Character-IDs | `[]` |
-| `system_prompt` | Instruktionen für den GM | `"..."` |
+| Field | Description | Default |
+|-------|-------------|---------|
+| `enabled` | Enable/disable Game Manager | `true` |
+| `tick_interval_seconds` | Time between analysis cycles | `30` |
+| `llm_provider` | LLM backend for GM | `"ollama"` |
+| `llm_model` | Model for GM | `"llama3"` |
+| `story_context` | Background story info | `""` |
+| `known_characters` | List of character IDs | `[]` |
+| `system_prompt` | Instructions for the GM | `"..."` |
 
-### Funktionsweise
+### How It Works
 
-1. **Alle X Sekunden** führt der Game Manager aus:
-   - Sammelt alle NPC-Gesprächsverläufe
-   - Prüft auf neue Game Clues
-   - Analysiert die Situation
-   - Entscheidet ob Charaktere neue Instruktionen brauchen
+1. **Every X seconds** the Game Manager executes:
+   - Collects all NPC conversation histories
+   - Checks for new game clues
+   - Analyzes the situation
+   - Decides if characters need new instructions
 
-2. **Ausgabe-Format**:
+2. **Output Format**:
    ```
-   THINKING: [Analyse der Situation]
-   ACTION: INJECT LisaParker: Werde nervöser wenn die Mordwaffe erwähnt wird.
-   ```
-
-3. **Injektionen** werden dem Character's System-Prompt hinzugefügt:
-   ```
-   [GAME]: Werde nervöser wenn die Mordwaffe erwähnt wird.
+   THINKING: [Analysis of the situation]
+   ACTION: INJECT LisaParker: Become more nervous when the murder weapon is mentioned.
    ```
 
-### Web-UI
+3. **Injections** are added to the character's system prompt:
+   ```
+   [GAME]: Become more nervous when the murder weapon is mentioned.
+   ```
 
-Das Game Manager Panel im Web-Interface zeigt:
+### Web UI
+
+The Game Manager Panel in the web interface shows:
 - **Status**: Active / Processing / Disabled
-- **Timer**: Countdown bis zum nächsten Tick
-- **Trigger-Button**: Manuellen Tick auslösen
-- **Game Clues**: Hinweise eingeben die der GM berücksichtigt
-- **Last Thinking**: Letzte Analyse des GM
-- **Last Actions**: Letzte Injektionen
-- **History**: Verlauf aller Entscheidungen
+- **Timer**: Countdown until next tick
+- **Trigger Button**: Manually trigger a tick
+- **Game Clues**: Enter hints for the GM to consider
+- **Last Thinking**: GM's last analysis
+- **Last Actions**: Last injections
+- **History**: History of all decisions
 
 ---
 
-## 💉 System-Prompt-Injection
+## 💉 System Prompt Injection
 
-Injiziere Kontext oder Instruktionen in Charaktere während des Spiels.
+Inject context or instructions into characters during gameplay.
 
-### Zwei Methoden
+### Two Methods
 
-#### 1. Direkte Character-Injection (Web-UI)
+#### 1. Direct Character Injection (Web UI)
 
-Nutze das Inject-Feld unten im Chat um direkt in den aktuell ausgewählten Charakter zu injizieren.
+Use the Inject field at the bottom of the chat to inject directly into the currently selected character.
 
-**Beispiel**: "Der Spieler hat gerade eine blutige Waffe in der Küche gefunden."
+**Example**: "The player just found a bloody weapon in the kitchen."
 
-#### 2. Game Manager Clues (Web-UI)
+#### 2. Game Manager Clues (Web UI)
 
-Füge Hinweise im Game Manager Panel hinzu. Der Game Manager analysiert diese und entscheidet selbst, welche Charaktere welche Instruktionen bekommen.
+Add hints in the Game Manager Panel. The Game Manager analyzes these and decides itself which characters receive which instructions.
 
-**Beispiel**: "Spieler hat Alibi von Paul überprüft - es stimmt nicht"
+**Example**: "Player checked Paul's alibi - it doesn't match"
 
-### Programmatische Injection
+### Programmatic Injection
 
-Via WebSocket-Nachricht an einen Character:
+Via WebSocket message to a character:
 ```json
 {
   "type": "inject",
-  "content": "Der Spieler hat gerade eine blutige Waffe gefunden."
+  "content": "The player just found a bloody weapon."
 }
 ```
 
-Via WebSocket an Game Manager:
+Via WebSocket to Game Manager:
 ```json
 {
   "type": "inject_clue",
-  "content": "Spieler hat Beweisstück #3 gefunden"
+  "content": "Player found evidence item #3"
 }
 ```
 
-### Injection im System-Prompt
+### Injection in System Prompt
 
-Injektionen werden dem System-Prompt des Charakters hinzugefügt:
+Injections are added to the character's system prompt:
 
 ```
-[Originaler System-Prompt]
+[Original system prompt]
 
-[GAME]: Der Spieler hat gerade eine blutige Waffe gefunden.
-[GAME]: Werde nervöser bei Fragen zum Tatort.
+[GAME]: The player just found a bloody weapon.
+[GAME]: Become more nervous when asked about the crime scene.
 ```
 
 ---
 
 ## ⚡ Performance: Global Generation Lock
 
-Bei mehreren "warmen" NPC-Sessions verhindert ein globaler Lock, dass LLM+TTS gleichzeitig für mehrere Charaktere laufen. Dies:
+With multiple "warm" NPC sessions, a global lock prevents LLM+TTS from running simultaneously for multiple characters. This:
 
-- **Verhindert GPU-Überlastung** bei mehreren parallelen Generierungen
-- **Ermöglicht sofortiges Wechseln** zwischen NPCs (< 1 Sekunde)
-- **Serialisiert** schwere Compute-Tasks automatisch
+- **Prevents GPU overload** with multiple parallel generations
+- **Enables instant switching** between NPCs (< 1 second)
+- **Serializes** heavy compute tasks automatically
 
-Der Lock wird transparent verwaltet - aus Spieler-Sicht fühlt es sich an wie sofortiges Umschalten zwischen NPCs.
+The lock is managed transparently - from the player's perspective, it feels like instant switching between NPCs.
 
 ---
 
-## Unity-Integration
+## Unity Integration
 
-### Voraussetzungen
+### Prerequisites
 
-1. **NativeWebSocket-Package** installieren:
-   - Unity Package Manager öffnen
-   - "Add package from git URL..." wählen
-   - URL eingeben: `https://github.com/endel/NativeWebSocket.git#upm`
+1. **Install NativeWebSocket Package**:
+   - Open Unity Package Manager
+   - Select "Add package from git URL..."
+   - Enter URL: `https://github.com/endel/NativeWebSocket.git#upm`
 
-2. **Skripte kopieren**:
-   - Alle `.cs`-Dateien aus `RealtimeVoiceChatUnity/Assets/Scripts/` 
-   - In dein Unity-Projekt unter `Assets/Scripts/` kopieren
+2. **Copy Scripts**:
+   - All `.cs` files from `RealtimeVoiceChatUnity/Assets/Scripts/` 
+   - Copy to your Unity project under `Assets/Scripts/`
 
-### Skript-Übersicht
+### Script Overview
 
-#### `LiveLlmManager.cs` – Singleton für Mikrofon-Verwaltung
+#### `LiveLlmManager.cs` – Singleton for Microphone Management
 
-**Aufgabe**: Zentrale Mikrofon-Aufnahme, verteilt Audio an alle aktiven Charaktere.
+**Purpose**: Central microphone recording, distributes audio to all active characters.
 
-**Wichtige Einstellungen**:
+**Important Settings**:
 ```csharp
-[SerializeField] private int sampleRate = 48_000;      // Muss mit Server übereinstimmen!
-[SerializeField] private int chunkSamples = 2_048;     // Samples pro Chunk
-[SerializeField] private string microphoneDeviceName;  // Leer = Standard-Mikrofon
+[SerializeField] private int sampleRate = 48_000;      // Must match server!
+[SerializeField] private int chunkSamples = 2_048;     // Samples per chunk
+[SerializeField] private string microphoneDeviceName;  // Empty = default microphone
 ```
 
-**Funktionsweise**:
-- Startet automatisch Mikrofon-Aufnahme wenn ein Charakter registriert wird
-- Stoppt automatisch wenn kein Charakter mehr aktiv ist
-- Sendet Audio-Chunks an alle registrierten `LiveLlmCharacterBase`-Instanzen
+**How It Works**:
+- Automatically starts microphone recording when a character registers
+- Automatically stops when no character is active
+- Sends audio chunks to all registered `LiveLlmCharacterBase` instances
 
 ---
 
-#### `LiveLlmCharacter.cs` (eigentlich `LiveLlmCharacterBase`) – Charakter-Basisklasse
+#### `LiveLlmCharacter.cs` (actually `LiveLlmCharacterBase`) – Character Base Class
 
-**Aufgabe**: WebSocket-Verbindung, TTS-Wiedergabe, Trigger-basierte Aktivierung.
+**Purpose**: WebSocket connection, TTS playback, trigger-based activation.
 
-**Wichtige Einstellungen**:
+**Important Settings**:
 ```csharp
-[SerializeField] protected string characterId = "Character";  // Muss mit Server-Config übereinstimmen!
+[SerializeField] protected string characterId = "Character";  // Must match server config!
 [SerializeField] private string wsUrl = "ws://127.0.0.1:8000/ws";
-public AudioSource ttsSource;   // Für TTS-Wiedergabe (wird automatisch erstellt)
-public AudioSource monitorSource; // Optional: Mikrofon-Monitoring
-public Transform player;        // Referenz zum Spieler (für Trigger)
+public AudioSource ttsSource;   // For TTS playback (automatically created)
+public AudioSource monitorSource; // Optional: Microphone monitoring
+public Transform player;        // Reference to player (for trigger)
 ```
 
-**Automatisches Verhalten**:
-- Verbindet automatisch bei `Start()`
-- Aktiviert Konversation wenn Spieler den Trigger-Bereich betritt
-- Deaktiviert Konversation wenn Spieler den Bereich verlässt
+**Automatic Behavior**:
+- Connects automatically at `Start()`
+- Activates conversation when player enters trigger area
+- Deactivates conversation when player leaves the area
 
-**Wichtige Methoden**:
+**Important Methods**:
 ```csharp
-StartConversation()   // Manuell Konversation starten
-StopConversation()    // Manuell Konversation beenden
+StartConversation()   // Manually start conversation
+StopConversation()    // Manually end conversation
 ```
 
 ---
 
-#### `ExampleLiveCharacter.cs` – Beispiel-Implementation
+#### `ExampleLiveCharacter.cs` – Example Implementation
 
-Zeigt, wie man einen konkreten Charakter erstellt:
+Shows how to create a concrete character:
 
 ```csharp
 using UnityEngine;
@@ -530,36 +530,36 @@ public class Example_LiveLLM : LiveLlmCharacterBase
 {
     protected override void Awake()
     {
-        characterId = "PaulAdams";  // Muss in character_config.json existieren!
+        characterId = "PaulAdams";  // Must exist in character_config.json!
         base.Awake();
     }
 }
 ```
 
-### Einrichtung in Unity
+### Setup in Unity
 
-#### 1. Manager-GameObject erstellen
+#### 1. Create Manager GameObject
 
-1. Leeres GameObject erstellen: `GameObject > Create Empty`
-2. Umbenennen zu "LiveLlmManager"
-3. `LiveLlmManager.cs` hinzufügen
-4. **Wichtig**: Dieses GameObject wird automatisch `DontDestroyOnLoad`
+1. Create empty GameObject: `GameObject > Create Empty`
+2. Rename to "LiveLlmManager"
+3. Add `LiveLlmManager.cs`
+4. **Important**: This GameObject automatically becomes `DontDestroyOnLoad`
 
-#### 2. Charakter-NPC erstellen
+#### 2. Create Character NPC
 
-1. 3D-Modell in die Szene platzieren
-2. Eigenes Skript erstellen (siehe Beispiel unten)
-3. Skript zum NPC hinzufügen
-4. **SphereCollider** wird automatisch hinzugefügt (Trigger-Bereich)
-5. Collider-Radius anpassen (Gesprächsreichweite)
-6. **AudioSource** für TTS wird automatisch erstellt
+1. Place 3D model in the scene
+2. Create your own script (see example below)
+3. Add script to NPC
+4. **SphereCollider** is automatically added (trigger area)
+5. Adjust collider radius (conversation range)
+6. **AudioSource** for TTS is automatically created
 
-#### 3. Spieler konfigurieren
+#### 3. Configure Player
 
-1. Spieler-GameObject muss Tag `"Player"` haben
-2. Spieler braucht einen Collider für Trigger-Erkennung
+1. Player GameObject must have tag `"Player"`
+2. Player needs a collider for trigger detection
 
-### Beispiel: Eigenen Charakter erstellen
+### Example: Creating Your Own Character
 
 ```csharp
 using UnityEngine;
@@ -571,7 +571,7 @@ public class MyCustomCharacter : LiveLlmCharacterBase
     
     protected override void Awake()
     {
-        // Character-ID muss mit Server-Konfiguration übereinstimmen
+        // Character ID must match server configuration
         characterId = "LisaParker";
         base.Awake();
     }
@@ -580,7 +580,7 @@ public class MyCustomCharacter : LiveLlmCharacterBase
     {
         base.OnTriggerEnter(other);
         
-        // Eigene Logik beim Betreten des Gesprächsbereichs
+        // Custom logic when entering conversation area
         if (other.CompareTag("Player"))
         {
             animator?.SetBool("IsTalking", true);
@@ -591,7 +591,7 @@ public class MyCustomCharacter : LiveLlmCharacterBase
     {
         base.OnTriggerExit(other);
         
-        // Eigene Logik beim Verlassen
+        // Custom logic when leaving
         if (other.CompareTag("Player"))
         {
             animator?.SetBool("IsTalking", false);
@@ -600,27 +600,27 @@ public class MyCustomCharacter : LiveLlmCharacterBase
 }
 ```
 
-### Unity-Projekt-Einstellungen
+### Unity Project Settings
 
 1. **Player Settings > Other Settings**:
-   - `Run In Background` aktivieren (wichtig für WebSocket!)
+   - Enable `Run In Background` (important for WebSocket!)
 
 2. **Audio Settings**:
-   - Sample Rate auf 48000 Hz setzen (muss mit Server übereinstimmen)
+   - Set sample rate to 48000 Hz (must match server)
 
 ---
 
-## Datenfluss & Protokoll
+## Data Flow & Protocol
 
-### WebSocket-Verbindung
+### WebSocket Connection
 
-**URL-Format**: `ws://[host]:8000/ws?characterId=[CharacterID]`
+**URL Format**: `ws://[host]:8000/ws?characterId=[CharacterID]`
 
-Beispiel: `ws://127.0.0.1:8000/ws?characterId=LisaParker`
+Example: `ws://127.0.0.1:8000/ws?characterId=LisaParker`
 
-### Binär-Nachrichten (Client → Server)
+### Binary Messages (Client → Server)
 
-Audio-Chunks werden als Binärdaten gesendet:
+Audio chunks are sent as binary data:
 
 ```
 ┌─────────────┬─────────────┬──────────────────────┐
@@ -631,9 +631,9 @@ Audio-Chunks werden als Binärdaten gesendet:
 ```
 
 **Flags**:
-- Bit 0: `isTTSPlaying` (1 = TTS spielt gerade ab)
+- Bit 0: `isTTSPlaying` (1 = TTS is currently playing)
 
-### JSON-Nachrichten
+### JSON Messages
 
 **Client → Server**:
 ```json
@@ -645,18 +645,18 @@ Audio-Chunks werden als Binärdaten gesendet:
 
 **Server → Client**:
 ```json
-{"type": "partial_user_request", "content": "Hallo, wie...", "character_id": "LisaParker"}
-{"type": "final_user_request", "content": "Hallo, wie geht es dir?", "character_id": "LisaParker"}
-{"type": "partial_assistant_answer", "content": "Mir geht es...", "character_id": "LisaParker"}
-{"type": "final_assistant_answer", "content": "Mir geht es gut!", "character_id": "LisaParker"}
-{"type": "tts_chunk", "content": "[Base64-kodiertes PCM]", "character_id": "LisaParker"}
+{"type": "partial_user_request", "content": "Hello, how...", "character_id": "LisaParker"}
+{"type": "final_user_request", "content": "Hello, how are you?", "character_id": "LisaParker"}
+{"type": "partial_assistant_answer", "content": "I'm doing...", "character_id": "LisaParker"}
+{"type": "final_assistant_answer", "content": "I'm doing well!", "character_id": "LisaParker"}
+{"type": "tts_chunk", "content": "[Base64-encoded PCM]", "character_id": "LisaParker"}
 {"type": "tts_interruption", "character_id": "LisaParker"}
 {"type": "stop_tts", "character_id": "LisaParker"}
 ```
 
 ---
 
-## Fehlerbehebung
+## Troubleshooting
 
 ### "Ollama connection failed"
 
@@ -664,10 +664,10 @@ Audio-Chunks werden als Binärdaten gesendet:
 🤖💥 'ollama ps' command not found
 ```
 
-**Lösung**:
-1. Ollama installieren (siehe [Ollama einrichten](#ollama-einrichten))
-2. Prüfen ob Ollama läuft: `ollama list`
-3. Falls in WSL: Sicherstellen dass der WSL-Service läuft
+**Solution**:
+1. Install Ollama (see [Setting Up Ollama](#setting-up-ollama))
+2. Check if Ollama is running: `ollama list`
+3. If in WSL: Make sure the WSL service is running
 
 ### "TypeError: unsupported format string passed to NoneType"
 
@@ -675,96 +675,95 @@ Audio-Chunks werden als Binärdaten gesendet:
 TypeError: unsupported format string passed to NoneType.__format__
 ```
 
-**Ursache**: LLM-Initialisierung fehlgeschlagen (oft Ollama nicht erreichbar)
+**Cause**: LLM initialization failed (often Ollama not reachable)
 
-**Lösung**: 
-1. Ollama starten
-2. Modell laden: `ollama pull llama3`
-3. Server neu starten
+**Solution**: 
+1. Start Ollama
+2. Load model: `ollama pull llama3`
+3. Restart server
 
-### "IndentationError" beim Server-Start
+### "IndentationError" on Server Start
 
-**Ursache**: Syntaxfehler in Python-Dateien
+**Cause**: Syntax error in Python files
 
-**Lösung**: Prüfen ob alle Dateien korrekt formatiert sind (keine Tabs/Spaces-Mischung)
+**Solution**: Check that all files are correctly formatted (no tabs/spaces mix)
 
-### Unity: WebSocket verbindet nicht
+### Unity: WebSocket Not Connecting
 
-**Prüfen**:
-1. Server läuft auf Port 8000?
-2. `wsUrl` im Skript korrekt? (`ws://127.0.0.1:8000/ws`)
-3. `characterId` existiert in `character_config.json`?
-4. Firewall blockiert Port 8000?
+**Check**:
+1. Server running on port 8000?
+2. `wsUrl` in script correct? (`ws://127.0.0.1:8000/ws`)
+3. `characterId` exists in `character_config.json`?
+4. Firewall blocking port 8000?
 
-### Unity: Kein Audio
+### Unity: No Audio
 
-**Prüfen**:
-1. AudioSource vorhanden und nicht stumm?
-2. Audio-Listener in der Szene?
-3. TTS-Engine läuft fehlerfrei? (Server-Logs prüfen)
+**Check**:
+1. AudioSource present and not muted?
+2. Audio Listener in the scene?
+3. TTS engine running without errors? (Check server logs)
 
-### Hohe Latenz
+### High Latency
 
-**Optimierungen**:
-1. Schnelleres Whisper-Modell: `base.en` statt `large`
-2. Kokoro statt Coqui als TTS-Engine
-3. GPU verwenden (nicht CPU)
-4. Ollama-Modell optimieren (Q4-Quantisierung)
+**Optimizations**:
+1. Faster Whisper model: `base.en` instead of `large`
+2. Kokoro instead of Coqui as TTS engine
+3. Use GPU (not CPU)
+4. Optimize Ollama model (Q4 quantization)
 
 ---
 
-## Projektstruktur
+## Project Structure
 
 ```
 RealtimeVoice/
-├── README.md                          # Diese Dokumentation
+├── README.md                          # This documentation
 │
 ├── RealtimeVoiceChat/                 # Python Backend
 │   ├── code/
 │   │   ├── server.py                  # FastAPI WebSocket Server
-│   │   ├── speech_pipeline_manager.py # LLM + TTS Orchestrierung
-│   │   ├── game_manager.py            # 🎮 Game Manager LLM (NEU)
-│   │   ├── audio_in.py                # Audio-Eingabe-Verarbeitung
-│   │   ├── audio_module.py            # TTS-Engine-Abstraktion
-│   │   ├── llm_module.py              # LLM-Backend-Abstraktion
-│   │   ├── transcribe.py              # STT-Konfiguration
-│   │   ├── turndetect.py              # Sprechpausen-Erkennung
-│   │   ├── character_config.json      # Charakter-Definitionen
-│   │   ├── game_manager_config.json   # 🎮 Game Manager Config (NEU)
-│   │   ├── system_prompt.txt          # Standard-System-Prompt
-│   │   └── static/                    # Web-Interface
-│   │       ├── index.html             # UI mit Game Manager Panel
-│   │       ├── app.js                 # Client-Logik + GM Integration
+│   │   ├── speech_pipeline_manager.py # LLM + TTS Orchestration
+│   │   ├── game_manager.py            # 🎮 Game Manager LLM (NEW)
+│   │   ├── audio_in.py                # Audio input processing
+│   │   ├── audio_module.py            # TTS engine abstraction
+│   │   ├── llm_module.py              # LLM backend abstraction
+│   │   ├── transcribe.py              # STT configuration
+│   │   ├── turndetect.py              # Speech pause detection
+│   │   ├── character_config.json      # Character definitions
+│   │   ├── game_manager_config.json   # 🎮 Game Manager Config (NEW)
+│   │   ├── system_prompt.txt          # Default system prompt
+│   │   └── static/                    # Web interface
+│   │       ├── index.html             # UI with Game Manager Panel
+│   │       ├── app.js                 # Client logic + GM integration
 │   │       └── ...
 │   │
-│   ├── requirements.txt               # Python-Abhängigkeiten
-│   ├── Dockerfile                     # Container-Definition
-│   ├── docker-compose.yml             # Multi-Container-Setup
-│   └── install.bat                    # Windows-Installer
+│   ├── requirements.txt               # Python dependencies
+│   ├── Dockerfile                     # Container definition
+│   ├── docker-compose.yml             # Multi-container setup
+│   └── install.bat                    # Windows installer
 │
 └── RealtimeVoiceChatUnity/            # Unity Client
     └── Assets/
         └── Scripts/
-            ├── LiveLlmManager.cs      # Mikrofon-Manager (Singleton)
-            ├── LiveLlmCharacter.cs    # Charakter-Basisklasse
-            └── ExampleLiveCharacter.cs # Beispiel-Charakter
+            ├── LiveLlmManager.cs      # Microphone manager (Singleton)
+            ├── LiveLlmCharacter.cs    # Character base class
+            └── ExampleLiveCharacter.cs # Example character
 ```
 
 ---
 
-## Lizenz
+## License
 
-Das Projekt steht unter der MIT-Lizenz. Beachte jedoch die Lizenzen der verwendeten Komponenten:
+This project is under the MIT License. However, note the licenses of the components used:
 - **Coqui TTS**: CPML (Coqui Public Model License)
-- **Ollama-Modelle**: Variiert je nach Modell (z.B. Llama License)
+- **Ollama Models**: Varies by model (e.g., Llama License)
 - **RealtimeSTT/TTS**: MIT
 
 ---
 
-## Weitere Ressourcen
+## Additional Resources
 
-- [RealtimeSTT Dokumentation](https://github.com/KoljaB/RealtimeSTT)
-- [RealtimeTTS Dokumentation](https://github.com/KoljaB/RealtimeTTS)
-- [Ollama Dokumentation](https://ollama.com/docs)
-- [NativeWebSocket für Unity](https://github.com/endel/NativeWebSocket)
-
+- [RealtimeSTT Documentation](https://github.com/KoljaB/RealtimeSTT)
+- [RealtimeTTS Documentation](https://github.com/KoljaB/RealtimeTTS)
+- [Ollama Documentation](https://ollama.com/docs)
+- [NativeWebSocket for Unity](https://github.com/endel/NativeWebSocket)
