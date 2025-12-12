@@ -7,7 +7,7 @@ The technical **core (audio streaming, STT, TTS, WebSocket structure)** is based
 
 ---
 
-**Real-time voice AI backend for embodied agents** – No text boxes, just natural speech. Create immersive environments where NPCs can talk to players and converse with each other, while an AI Game Manager injects context and drives the storyline in the background. Supports **agent-to-player dialogue**, **agent-to-agent conversations**, and **dynamic context injection** – all through real-time voice (STT + LLM + TTS). Includes Unity integration scripts; the WebSocket-based architecture works with any platform.
+**Real-time voice AI backend for embodied agents** – Create immersive environments where NPCs can talk to players and converse with each other, while an AI Game Manager injects context and drives the storyline in the background. Supports **agent-to-player dialogue**, **agent-to-agent conversations**, and **dynamic context injection** – all through real-time voice (STT + LLM + TTS). Includes Unity integration scripts; the WebSocket-based architecture works with any platform.
 
 🖥️ **Designed to run locally** – All processing (speech recognition, LLM inference, voice synthesis) can run on your machine. No cloud APIs required by default, though they can be used if preferred (see [KoljaB/RealtimeVoiceChat](https://github.com/KoljaB/RealtimeVoiceChat) for cloud options).
 
@@ -32,7 +32,7 @@ Via the Unity client, NPCs can be:
 - **Combined** – Enable dialogues between NPCs, player moderation, role changes
 - **Context-injected** – Feed game events to characters or the Game Manager in real-time
 
-This makes the project ideal for **VR/game scenarios** requiring an **ensemble of intelligent NPCs** that dynamically respond to an evolving narrative.
+This makes the project ideal for **VR/game scenarios** requiring an **multiple intelligent NPCs** that dynamically respond to an evolving narrative.
 
 > ⚠️ **Important:** This project provides the framework and architecture for intelligent NPCs, but **prompt engineering is required** to make it work well for your specific use case. You will need to heavily customize the system prompts, Game Manager instructions, and character configurations to fit your game's narrative and desired NPC behaviors. The included prompts serve as examples and starting points.
 
@@ -63,7 +63,6 @@ The system consists of two main components:
   - [Prerequisites](#prerequisites)
   - [Script Overview](#script-overview)
   - [Setup in Unity](#setup-in-unity)
-  - [Example: Creating Your Own Character](#example-creating-your-own-character)
 - [Data Flow & Protocol](#data-flow--protocol)
 - [Troubleshooting](#troubleshooting)
 - [Project Structure](#project-structure)
@@ -672,46 +671,22 @@ public class Example_LiveLLM : LiveLlmCharacterBase
 1. Player GameObject must have tag `"Player"`
 2. Player needs a collider for trigger detection
 
-### Example: Creating Your Own Character
+### Creating Your Own Character
+
+Extend `LiveLlmCharacterBase` and set the `characterId` to match your `character_config.json`:
 
 ```csharp
-using UnityEngine;
-
-public class MyCustomCharacter : LiveLlmCharacterBase
+public class MyCharacter : LiveLlmCharacterBase
 {
-    [Header("Custom Settings")]
-    [SerializeField] private Animator animator;
-    
     protected override void Awake()
     {
-        // Character ID must match server configuration
-        characterId = "LisaParker";
+        characterId = "LisaParker";  // Must match server config
         base.Awake();
-    }
-    
-    protected override void OnTriggerEnter(Collider other)
-    {
-        base.OnTriggerEnter(other);
-        
-        // Custom logic when entering conversation area
-        if (other.CompareTag("Player"))
-        {
-            animator?.SetBool("IsTalking", true);
-        }
-    }
-    
-    protected override void OnTriggerExit(Collider other)
-    {
-        base.OnTriggerExit(other);
-        
-        // Custom logic when leaving
-        if (other.CompareTag("Player"))
-        {
-            animator?.SetBool("IsTalking", false);
-        }
     }
 }
 ```
+
+See `ExampleLiveCharacter.cs` for a complete example with trigger-based activation.
 
 ### Unity Project Settings
 
@@ -771,58 +746,12 @@ Audio chunks are sent as binary data:
 
 ## Troubleshooting
 
-### "Ollama connection failed"
+Use the **web interface** (`http://localhost:8000`) for testing and debugging your prompts and configurations.
 
-```
-🤖💥 'ollama ps' command not found
-```
-
-**Solution**:
-1. Install Ollama (see [Setting Up Ollama](#setting-up-ollama))
-2. Check if Ollama is running: `ollama list`
-3. If in WSL: Make sure the WSL service is running
-
-### "TypeError: unsupported format string passed to NoneType"
-
-```
-TypeError: unsupported format string passed to NoneType.__format__
-```
-
-**Cause**: LLM initialization failed (often Ollama not reachable)
-
-**Solution**: 
-1. Start Ollama
-2. Load model: `ollama pull llama3`
-3. Restart server
-
-### "IndentationError" on Server Start
-
-**Cause**: Syntax error in Python files
-
-**Solution**: Check that all files are correctly formatted (no tabs/spaces mix)
-
-### Unity: WebSocket Not Connecting
-
-**Check**:
-1. Server running on port 8000?
-2. `wsUrl` in script correct? (`ws://127.0.0.1:8000/ws`)
-3. `characterId` exists in `character_config.json`?
-4. Firewall blocking port 8000?
-
-### Unity: No Audio
-
-**Check**:
-1. AudioSource present and not muted?
-2. Audio Listener in the scene?
-3. TTS engine running without errors? (Check server logs)
-
-### High Latency
-
-**Optimizations**:
-1. Faster Whisper model: `base.en` instead of `large`
-2. Kokoro instead of Coqui as TTS engine
-3. Use GPU (not CPU)
-4. Optimize Ollama model (Q4 quantization)
+**Common issues**:
+- **Ollama not running**: Start with `ollama serve` and ensure model is pulled (`ollama pull llama3`)
+- **WebSocket not connecting**: Check server is running on port 8000 and `characterId` matches `character_config.json`
+- **High latency**: Use GPU, faster Whisper model (`base.en`), Kokoro TTS, and quantized LLM models
 
 ---
 
