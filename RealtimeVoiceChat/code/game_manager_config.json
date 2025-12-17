@@ -1,6 +1,6 @@
 {
   "enabled": true,
-  "tick_interval_seconds": 30,
+  "tick_interval_seconds": 60,
   "llm_provider": "ollama",
   "llm_model": "llama3",
   "story_context": "An interactive murder mystery. David was murdered. The player is a detective investigating the case. Lisa Parker and Paul Adams are suspects - both knew David well and may be hiding something.",

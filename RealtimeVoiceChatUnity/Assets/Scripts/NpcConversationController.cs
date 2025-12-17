@@ -1,0 +1,455 @@
+using System;
+using System.Collections;
+using System.Text;
+using System.Threading.Tasks;
+using NativeWebSocket;
+using UnityEngine;
+using UnityEngine.Events;
+
+/// <summary>
+/// Controls NPC-to-NPC conversations.
+/// Routes audio from server to the correct character's AudioSource.
+/// Can trigger conversations manually or on a timer (for testing).
+/// </summary>
+public class NpcConversationController : MonoBehaviour
+{
+    public static NpcConversationController Instance { get; private set; }
+
+    [Header("WebSocket")]
+    [SerializeField] private string wsUrl = "ws://127.0.0.1:8000/ws/npc_conversation";
+
+    [Header("Auto-Trigger (Testing)")]
+    [Tooltip("Enable automatic conversations on a timer")]
+    [SerializeField] private bool autoTriggerEnabled = true;
+    [Tooltip("Seconds between auto-triggered conversations")]
+    [SerializeField] private float autoTriggerInterval = 15f;
+    [Tooltip("Number of turns per auto-triggered conversation")]
+    [SerializeField] private int autoTriggerTurns = 3;
+    [Tooltip("Character IDs for auto-trigger (leave empty to use first two registered)")]
+    [SerializeField] private string[] autoTriggerCharacters = new string[] { "LisaParker", "PaulAdams" };
+    [Tooltip("Context/topic for auto-triggered conversations")]
+    [SerializeField] private string autoTriggerContext = "Have a brief casual conversation.";
+
+    [Header("Events")]
+    public UnityEvent<string, string> OnConversationTurn; // speaker, message
+    public UnityEvent<string> OnConversationStateChanged; // state
+    public UnityEvent OnConversationStarted;
+    public UnityEvent OnConversationEnded;
+
+    private WebSocket ws;
+    private bool isConversationRunning;
+    private Coroutine autoTriggerCoroutine;
+    
+    // Audio queue to prevent speakers from overlapping
+    private System.Collections.Generic.Queue<(string speakerId, string base64Audio)> audioQueue = new();
+    private bool isPlayingAudio = false;
+    private Coroutine audioPlaybackCoroutine;
+
+    [Serializable]
+    private class ServerMessage
+    {
+        public string type;
+        public string speaker_id;  // Used in npc_conversation_turn
+        public string message;
+        public int turn_number;
+        public bool is_last;
+        public string state;       // Used in npc_conversation_state
+        public int current_turn;
+        public int max_turns;
+    }
+
+    [Serializable]
+    private class StartConversationMessage
+    {
+        public string type = "start_conversation";
+        public string npc1_id;
+        public string npc2_id;
+        public int turns;
+        public string context;
+    }
+
+    [Serializable]
+    private class StopConversationMessage
+    {
+        public string type = "stop_conversation";
+    }
+
+    private void Awake()
+    {
+        if (Instance != null && Instance != this)
+        {
+            Destroy(gameObject);
+            return;
+        }
+        Instance = this;
+        DontDestroyOnLoad(gameObject);
+    }
+
+    private void Start()
+    {
+        Debug.Log($"[NpcConversation] Start() called. AutoTriggerEnabled: {autoTriggerEnabled}");
+        
+        // Start auto-trigger FIRST (before WebSocket blocks)
+        if (autoTriggerEnabled)
+        {
+            Debug.Log("[NpcConversation] Starting auto-trigger coroutine...");
+            autoTriggerCoroutine = StartCoroutine(AutoTriggerLoop());
+        }
+        else
+        {
+            Debug.Log("[NpcConversation] Auto-trigger is DISABLED in inspector.");
+        }
+        
+        // Connect WebSocket (don't await - let it run in background)
+        _ = ConnectWebSocket();
+    }
+
+    private void Update()
+    {
+#if !UNITY_WEBGL || UNITY_EDITOR
+        ws?.DispatchMessageQueue();
+#endif
+    }
+
+    private void OnDestroy()
+    {
+        if (autoTriggerCoroutine != null)
+        {
+            StopCoroutine(autoTriggerCoroutine);
+        }
+        ws?.Close();
+        ws = null;
+    }
+
+    private async Task ConnectWebSocket()
+    {
+        ws = new WebSocket(wsUrl);
+
+        ws.OnOpen += () =>
+        {
+            Debug.Log("[NpcConversation] WebSocket connected.");
+        };
+
+        ws.OnError += e => Debug.LogError($"[NpcConversation] WebSocket error: {e}");
+        ws.OnClose += e => Debug.Log($"[NpcConversation] WebSocket closed: {e}");
+        ws.OnMessage += HandleServerMessage;
+
+        try
+        {
+            await ws.Connect();
+        }
+        catch (Exception ex)
+        {
+            Debug.LogError($"[NpcConversation] WebSocket connect failed: {ex.Message}");
+        }
+    }
+
+    private void HandleServerMessage(byte[] bytes)
+    {
+        if (bytes == null || bytes.Length == 0) return;
+
+        // Check if this is binary audio data (starts with speaker ID header, 32 bytes)
+        // Binary audio has a 32-byte header with speaker ID, then PCM audio data
+        // JSON messages start with '{' (0x7B)
+        if (bytes[0] != 0x7B) // Not a JSON message (doesn't start with '{')
+        {
+            HandleBinaryAudio(bytes);
+            return;
+        }
+
+        string json;
+        try
+        {
+            json = Encoding.UTF8.GetString(bytes);
+        }
+        catch (Exception ex)
+        {
+            Debug.LogError($"[NpcConversation] Failed to decode message: {ex.Message}");
+            return;
+        }
+
+        ServerMessage msg;
+        try
+        {
+            msg = JsonUtility.FromJson<ServerMessage>(json);
+        }
+        catch (Exception ex)
+        {
+            Debug.LogError($"[NpcConversation] Invalid JSON: {ex.Message}");
+            return;
+        }
+
+        switch (msg.type)
+        {
+            case "npc_conversation_state":
+                HandleStateUpdate(msg);
+                break;
+
+            case "npc_conversation_turn":
+                HandleTurn(msg);
+                break;
+
+            case "available_characters":
+                // Server sends list of available characters - can be used for UI
+                Debug.Log($"[NpcConversation] Available characters received.");
+                break;
+
+            default:
+                Debug.Log($"[NpcConversation] Unhandled message type: {msg.type}");
+                break;
+        }
+    }
+
+    private void HandleBinaryAudio(byte[] bytes)
+    {
+        // Binary format: 32-byte speaker ID header (null-padded) + PCM audio data
+        if (bytes.Length <= 32)
+        {
+            Debug.LogWarning("[NpcConversation] Binary message too short for audio.");
+            return;
+        }
+
+        // Extract speaker ID from first 32 bytes (null-terminated string)
+        string speakerId = Encoding.UTF8.GetString(bytes, 0, 32).TrimEnd('\0');
+        
+        // Extract audio data (everything after header)
+        int audioLength = bytes.Length - 32;
+        byte[] audioBytes = new byte[audioLength];
+        Array.Copy(bytes, 32, audioBytes, 0, audioLength);
+
+        Debug.Log($"[NpcConversation] Received {audioLength} bytes of audio for {speakerId}");
+
+        // Convert to base64 and queue for playback (to prevent overlap)
+        string base64Audio = Convert.ToBase64String(audioBytes);
+        audioQueue.Enqueue((speakerId, base64Audio));
+        
+        // Start playback coroutine if not running
+        if (audioPlaybackCoroutine == null)
+        {
+            audioPlaybackCoroutine = StartCoroutine(ProcessAudioQueue());
+        }
+    }
+    
+    private IEnumerator ProcessAudioQueue()
+    {
+        const int NPC_SAMPLE_RATE = 24000; // TTS outputs at 24kHz
+        
+        while (audioQueue.Count > 0 || isPlayingAudio)
+        {
+            if (audioQueue.Count > 0 && !isPlayingAudio)
+            {
+                var (speakerId, base64Audio) = audioQueue.Dequeue();
+                
+                var character = LiveLlmCharacterBase.GetCharacter(speakerId);
+                if (character != null && character.ttsSource != null)
+                {
+                    Debug.Log($"[NpcConversation] Playing audio for {speakerId}");
+                    isPlayingAudio = true;
+                    
+                    // Decode audio bytes
+                    byte[] audioBytes = Convert.FromBase64String(base64Audio);
+                    int sampleCount = audioBytes.Length / 2; // 16-bit = 2 bytes per sample
+                    
+                    // Convert to float samples
+                    float[] samples = new float[sampleCount];
+                    for (int i = 0; i < sampleCount; i++)
+                    {
+                        short s = BitConverter.ToInt16(audioBytes, i * 2);
+                        samples[i] = s / 32768f;
+                    }
+                    
+                    // Create AudioClip at 24kHz (native TTS rate)
+                    AudioClip clip = AudioClip.Create($"NpcConv_{speakerId}", sampleCount, 1, NPC_SAMPLE_RATE, false);
+                    clip.SetData(samples, 0);
+                    
+                    // Play through character's AudioSource (preserves 3D spatial audio)
+                    character.ttsSource.PlayOneShot(clip);
+                    
+                    float durationSeconds = (float)sampleCount / NPC_SAMPLE_RATE;
+                    Debug.Log($"[NpcConversation] Audio duration: {durationSeconds:F2}s for {speakerId}");
+                    
+                    // Wait for audio to finish (plus small buffer)
+                    yield return new WaitForSeconds(durationSeconds + 0.2f);
+                    
+                    isPlayingAudio = false;
+                }
+                else
+                {
+                    Debug.LogWarning($"[NpcConversation] Character '{speakerId}' not found or no AudioSource. Available: {string.Join(", ", LiveLlmCharacterBase.AllCharacters.Keys)}");
+                }
+            }
+            else
+            {
+                yield return null;
+            }
+        }
+        
+        audioPlaybackCoroutine = null;
+        Debug.Log("[NpcConversation] Audio queue empty, playback coroutine finished.");
+    }
+
+    private void HandleStateUpdate(ServerMessage msg)
+    {
+        Debug.Log($"[NpcConversation] State: {msg.state} (turn {msg.current_turn}/{msg.max_turns})");
+        
+        OnConversationStateChanged?.Invoke(msg.state);
+
+        if (msg.state == "running")
+        {
+            isConversationRunning = true;
+            OnConversationStarted?.Invoke();
+        }
+        else if (msg.state == "finished" || msg.state == "stopped" || msg.state == "error")
+        {
+            isConversationRunning = false;
+            OnConversationEnded?.Invoke();
+        }
+    }
+
+    private void HandleTurn(ServerMessage msg)
+    {
+        Debug.Log($"[NpcConversation] Turn {msg.turn_number} - {msg.speaker_id}: {msg.message}");
+        OnConversationTurn?.Invoke(msg.speaker_id, msg.message);
+    }
+
+    /// <summary>
+    /// Start a conversation between two NPCs.
+    /// </summary>
+    /// <param name="npc1">First character ID (must match character_config.json)</param>
+    /// <param name="npc2">Second character ID</param>
+    /// <param name="turns">Number of back-and-forth exchanges</param>
+    /// <param name="context">Topic or context for the conversation</param>
+    public async void StartConversation(string npc1, string npc2, int turns = 3, string context = "")
+    {
+        if (ws == null || ws.State != WebSocketState.Open)
+        {
+            Debug.LogError("[NpcConversation] WebSocket not connected.");
+            return;
+        }
+
+        if (isConversationRunning)
+        {
+            Debug.LogWarning("[NpcConversation] Conversation already running.");
+            return;
+        }
+
+        var msg = new StartConversationMessage
+        {
+            npc1_id = npc1,
+            npc2_id = npc2,
+            turns = turns,
+            context = context
+        };
+
+        string json = JsonUtility.ToJson(msg);
+        Debug.Log($"[NpcConversation] Starting: {npc1} <-> {npc2}, {turns} turns, context: '{context}'");
+
+        try
+        {
+            await ws.SendText(json);
+        }
+        catch (Exception ex)
+        {
+            Debug.LogError($"[NpcConversation] Failed to send start message: {ex.Message}");
+        }
+    }
+
+    /// <summary>
+    /// Stop the current NPC conversation.
+    /// </summary>
+    public async void StopConversation()
+    {
+        if (ws == null || ws.State != WebSocketState.Open)
+        {
+            Debug.LogError("[NpcConversation] WebSocket not connected.");
+            return;
+        }
+
+        var msg = new StopConversationMessage();
+        string json = JsonUtility.ToJson(msg);
+
+        Debug.Log("[NpcConversation] Stopping conversation.");
+
+        try
+        {
+            await ws.SendText(json);
+        }
+        catch (Exception ex)
+        {
+            Debug.LogError($"[NpcConversation] Failed to send stop message: {ex.Message}");
+        }
+    }
+
+    /// <summary>
+    /// Check if a conversation is currently running.
+    /// </summary>
+    public bool IsConversationRunning => isConversationRunning;
+
+    private IEnumerator AutoTriggerLoop()
+    {
+        // Wait for characters to register
+        Debug.Log($"[NpcConversation] Auto-trigger enabled. Waiting 5s for characters, then {autoTriggerInterval}s between triggers.");
+        yield return new WaitForSeconds(5f);
+
+        while (autoTriggerEnabled)
+        {
+            Debug.Log($"[NpcConversation] Next auto-trigger in {autoTriggerInterval} seconds...");
+            yield return new WaitForSeconds(autoTriggerInterval);
+
+            if (isConversationRunning)
+            {
+                Debug.Log("[NpcConversation] Auto-trigger skipped: conversation already running.");
+                continue;
+            }
+
+            // Determine which characters to use
+            string npc1 = null, npc2 = null;
+
+            if (autoTriggerCharacters != null && autoTriggerCharacters.Length >= 2)
+            {
+                npc1 = autoTriggerCharacters[0];
+                npc2 = autoTriggerCharacters[1];
+            }
+            else
+            {
+                // Use first two registered characters
+                var keys = new System.Collections.Generic.List<string>(LiveLlmCharacterBase.AllCharacters.Keys);
+                if (keys.Count >= 2)
+                {
+                    npc1 = keys[0];
+                    npc2 = keys[1];
+                }
+            }
+
+            if (string.IsNullOrEmpty(npc1) || string.IsNullOrEmpty(npc2))
+            {
+                Debug.LogWarning("[NpcConversation] Auto-trigger: Not enough characters registered.");
+                continue;
+            }
+
+            Debug.Log($"[NpcConversation] Auto-triggering conversation: {npc1} <-> {npc2}");
+            StartConversation(npc1, npc2, autoTriggerTurns, autoTriggerContext);
+        }
+    }
+
+    /// <summary>
+    /// Enable or disable auto-trigger at runtime.
+    /// </summary>
+    public void SetAutoTrigger(bool enabled, float interval = 60f)
+    {
+        autoTriggerEnabled = enabled;
+        autoTriggerInterval = interval;
+
+        if (autoTriggerCoroutine != null)
+        {
+            StopCoroutine(autoTriggerCoroutine);
+            autoTriggerCoroutine = null;
+        }
+
+        if (enabled)
+        {
+            autoTriggerCoroutine = StartCoroutine(AutoTriggerLoop());
+        }
+    }
+}
+

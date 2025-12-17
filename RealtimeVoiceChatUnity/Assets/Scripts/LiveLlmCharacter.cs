@@ -1,5 +1,6 @@
 using System;
 using System.Collections;
+using System.Collections.Generic;
 using System.Text;
 using System.Threading.Tasks;
 using NativeWebSocket;
@@ -8,8 +9,19 @@ using UnityEngine;
 [RequireComponent(typeof(SphereCollider))]
 public class LiveLlmCharacterBase : MonoBehaviour
 {
+    // Static registry of all characters by ID (for NPC conversations)
+    private static Dictionary<string, LiveLlmCharacterBase> characterRegistry = new();
+    public static IReadOnlyDictionary<string, LiveLlmCharacterBase> AllCharacters => characterRegistry;
+
+    public static LiveLlmCharacterBase GetCharacter(string id)
+    {
+        characterRegistry.TryGetValue(id, out var character);
+        return character;
+    }
+
     [Header("Character")]
     [SerializeField] protected string characterId = "Character";
+    public string CharacterId => characterId;
 
     [Header("References")]
     public Transform player;
@@ -65,10 +77,17 @@ public class LiveLlmCharacterBase : MonoBehaviour
         ttsSource.playOnAwake = false;
         ttsSource.loop = true;
 
+        ttsSource.spatialBlend = 1f;
+        ttsSource.rolloffMode = AudioRolloffMode.Logarithmic;
+        ttsSource.minDistance = 1.5f;
+        ttsSource.maxDistance = 15f;
+        ttsSource.dopplerLevel = 0f;
+
         if (monitorSource)
         {
             monitorSource.playOnAwake = false;
             monitorSource.loop = false;
+            monitorSource.spatialBlend = 0f; 
         }
 
         SetupTtsStream();
@@ -95,6 +114,14 @@ public class LiveLlmCharacterBase : MonoBehaviour
     protected virtual async void Start()
     {
         Application.runInBackground = true;
+        
+        // Register in static registry for NPC conversations
+        if (!string.IsNullOrEmpty(characterId))
+        {
+            characterRegistry[characterId] = this;
+            Debug.Log($"[{characterId}] Registered in character registry.");
+        }
+        
         await SetupWebSocket();
     }
 
@@ -141,6 +168,12 @@ public class LiveLlmCharacterBase : MonoBehaviour
 
     protected virtual void OnDestroy()
     {
+        // Unregister from static registry
+        if (!string.IsNullOrEmpty(characterId) && characterRegistry.ContainsKey(characterId))
+        {
+            characterRegistry.Remove(characterId);
+        }
+        
         LiveLlmManager.Instance?.UnregisterCharacter(this);
         ws?.Close();
         ws = null;
@@ -264,10 +297,24 @@ public class LiveLlmCharacterBase : MonoBehaviour
                 ForceStopTts(true);
                 break;
 
+            case "character_ready":
+                // Server signals character is fully initialized
+                Debug.Log($"[{characterId}] Character ready signal received.");
+                break;
+
             default:
                 Debug.Log($"[{characterId}] Unhandled message type '{msg.type}'.");
                 break;
         }
+    }
+
+    /// <summary>
+    /// Play TTS audio from external source (e.g., NPC conversations).
+    /// Called by NpcConversationController to route audio to this character.
+    /// </summary>
+    public void PlayExternalTtsChunk(string base64Content)
+    {
+        PlayTtsChunk(base64Content);
     }
 
     private void PlayTtsChunk(string base64Content)
