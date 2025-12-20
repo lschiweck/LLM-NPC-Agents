@@ -19,10 +19,12 @@ The technical **core (audio streaming, STT, TTS, WebSocket structure)** is based
 
 <div align="center">
 
-[![Web Interface Demo](LLM_NPC_Example_web.mp4)](LLM_NPC_Example_web.mp4)
+<video width="100%" controls>
+  <source src="LLM_NPC_Example_web.mp4" type="video/mp4">
+  Your browser does not support the video tag.
+</video>
 
-*Testing and development interface showing NPC conversations, Game Manager, and context injection.*  
-📹 [Watch Video](LLM_NPC_Example_web.mp4)
+*Testing and development interface showing NPC conversations, Game Manager, and context injection.*
 
 </div>
 
@@ -30,10 +32,12 @@ The technical **core (audio streaming, STT, TTS, WebSocket structure)** is based
 
 <div align="center">
 
-[![Unity Integration Demo](LLM_NPC_Example_natural.mp4)](LLM_NPC_Example_natural.mp4)
+<video width="100%" controls>
+  <source src="LLM_NPC_Example_natural.mp4" type="video/mp4">
+  Your browser does not support the video tag.
+</video>
 
-*Example detective game in Unity with NPC-to-NPC conversations and 3D spatial audio.*  
-📹 [Watch Video](LLM_NPC_Example_natural.mp4)
+*Example detective game in Unity with NPC-to-NPC conversations and 3D spatial audio.*
 
 </div>
 
@@ -648,11 +652,11 @@ NpcConversationController.Instance.StopConversation();
 
 #### Unity Events
 
-The `NpcConversationController` provides UnityEvents for UI/animations:
-- `OnConversationTurn(string speaker, string message)` - Fires for each turn (for subtitles)
-- `OnConversationStarted()` - Conversation begins
-- `OnConversationEnded()` - Conversation finishes
-- `OnConversationStateChanged(string state)` - State updates (running/finished/error)
+The `NpcConversationController` provides UnityEvents for UI integration:
+- `OnConversationTurn(string speaker, string message)` - Fires for each turn (useful for subtitles/UI)
+- `OnConversationStarted()` - Conversation begins (useful for UI status indicators)
+- `OnConversationEnded()` - Conversation finishes (useful for UI status indicators)
+- `OnConversationStateChanged(string state)` - State updates (running/finished/error) for UI status displays
 
 ---
 
