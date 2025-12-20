@@ -19,10 +19,10 @@ The technical **core (audio streaming, STT, TTS, WebSocket structure)** is based
 
 <div align="center">
 
-[![Web Interface Demo](web_demo_thumbnail.png)](web_demo.mp4)
+[![Web Interface Demo](LLM_NPC_Example_web.mp4)](LLM_NPC_Example_web.mp4)
 
 *Testing and development interface showing NPC conversations, Game Manager, and context injection.*  
-📹 [Watch Video](web_demo.mp4)
+📹 [Watch Video](LLM_NPC_Example_web.mp4)
 
 </div>
 
@@ -30,14 +30,12 @@ The technical **core (audio streaming, STT, TTS, WebSocket structure)** is based
 
 <div align="center">
 
-[![Unity Integration Demo](unity_demo_thumbnail.png)](unity_demo.mp4)
+[![Unity Integration Demo](LLM_NPC_Example_natural.mp4)](LLM_NPC_Example_natural.mp4)
 
 *Example detective game in Unity with NPC-to-NPC conversations and 3D spatial audio.*  
-📹 [Watch Video](unity_demo.mp4)
+📹 [Watch Video](LLM_NPC_Example_natural.mp4)
 
 </div>
-
-> **Note:** Add your video files (`web_demo.mp4`, `unity_demo.mp4`) and thumbnail images to the repository root, or replace with YouTube/Vimeo embeds using iframe tags.
 
 ---
 
