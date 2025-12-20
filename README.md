@@ -13,33 +13,19 @@ The technical **core (audio streaming, STT, TTS, WebSocket structure)** is based
 
 ![LLM NPCs Demo](example.png)
 
-## Video Previews
+## 🎥 Video Demos
 
 ### 🌐 Web Interface Demo
 
-<div align="center">
-
-<video width="100%" controls>
-  <source src="LLM_NPC_Example_web.mp4" type="video/mp4">
-  Your browser does not support the video tag.
-</video>
+[![Web Interface Demo](example.png)](LLM_NPC_Example_web.mp4)
 
 *Testing and development interface showing NPC conversations, Game Manager, and context injection.*
 
-</div>
-
 ### 🎮 Unity Integration Demo
 
-<div align="center">
-
-<video width="100%" controls>
-  <source src="LLM_NPC_Example_natural.mp4" type="video/mp4">
-  Your browser does not support the video tag.
-</video>
+[![Unity Integration Demo](example.png)](LLM_NPC_Example_natural.mp4)
 
 *Example detective game in Unity with NPC-to-NPC conversations and 3D spatial audio.*
-
-</div>
 
 ---
 
