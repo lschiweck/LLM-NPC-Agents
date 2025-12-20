@@ -57,13 +57,13 @@ The system consists of two main components:
 - [Character Configuration](#character-configuration)
 - [🎮 Game Manager LLM](#-game-manager-llm)
 - [💉 System Prompt Injection](#-system-prompt-injection)
-- [🗣️ NPC-to-NPC Cnoversations](#️-npc-to-npc-conversations)
+- [🗣️ NPC-to-NPC Conversations](#️-npc-to-npc-conversations)
 - [⚡ Performance: Global Generation Lock](#-performance-global-generation-lock)
 - [Unity Integration](#unity-integration)
   - [Prerequisites](#prerequisites)
   - [Script Overview](#script-overview)
   - [Setup in Unity](#setup-in-unity)
-- [Data Flow & Protocol](#data-flow--protocol)
+  - [NPC-to-NPC Conversations in Unity](#npc-to-npc-conversations-in-unity)
 - [Troubleshooting](#troubleshooting)
 - [Project Structure](#project-structure)
 
@@ -98,13 +98,13 @@ The system consists of two main components:
 
 ### Conversation Flow
 
-1. **Voice Recording**: Unity captures microphone audio (48kHz, Mono, 16-bit PCM)
-2. **Streaming**: Audio chunks are sent to the server via WebSocket
-3. **Speech-to-Text**: `RealtimeSTT` converts speech to text (Whisper-based)
-4. **LLM Inference**: The text is sent to Ollama/OpenAI, response is streamed
-5. **Text-to-Speech**: `RealtimeTTS` synthesizes the response (Kokoro/Coqui/Orpheus)
-6. **Audio Streaming**: TTS chunks are sent back as Base64-encoded PCM
-7. **Playback**: Unity decodes and plays back the response
+1. **Voice Recording** → Unity captures microphone audio (48kHz PCM)
+2. **Streaming** → Audio sent to server via WebSocket
+3. **Speech-to-Text** → `RealtimeSTT` (Whisper-based) converts to text
+4. **LLM Inference** → Ollama/OpenAI generates response
+5. **Text-to-Speech** → `RealtimeTTS` (Kokoro/Coqui/Orpheus) synthesizes audio
+6. **Audio Streaming** → TTS chunks sent back as Base64 PCM
+7. **Playback** → Unity plays audio from character's 3D position
 
 ---
 
@@ -348,15 +348,9 @@ Characters are defined in `RealtimeVoiceChat/code/character_config.json`:
 
 ### TTS Engine Voices
 
-**Kokoro** (fast, good quality):
-- `af_heart`, `af_bella`, `af_sarah` (female)
-- `am_adam`, `am_fenrir`, `am_michael` (male)
-
-**Coqui** (best quality, slower):
-- Supports voice cloning with `reference_audio`
-
-**Orpheus** (experimental):
-- Requires separate model
+- **Kokoro** (fast, good quality): `af_heart`, `af_bella`, `af_sarah` (female), `am_adam`, `am_fenrir`, `am_michael` (male)
+- **Coqui** (best quality, slower): Supports voice cloning with `reference_audio`
+- **Orpheus** (experimental): Requires separate model
 
 ---
 
@@ -400,82 +394,52 @@ The Game Manager is an AI "game master" that runs in the background and orchestr
 
 ### How It Works
 
-1. **Every X seconds** the Game Manager executes:
-   - Collects all NPC conversation histories
-   - Checks for new game clues
-   - Analyzes the situation
-   - Decides if characters need new instructions
+Every X seconds (configurable), the Game Manager:
+1. Collects all NPC conversation histories
+2. Checks for new game clues
+3. Analyzes the situation using the LLM
+4. Decides which characters need new instructions
+5. Injects instructions into character system prompts
 
-2. **Output Format**:
-   ```
-   THINKING: [Analysis of the situation]
-   ACTION: INJECT LisaParker: Become more nervous when the murder weapon is mentioned.
-   ```
-
-3. **Injections** are added to the character's system prompt:
-   ```
-   [GAME]: Become more nervous when the murder weapon is mentioned.
-   ```
+**Injection Format**: Instructions are added as `[DIRECTOR'S NOTE - DO NOT SAY THIS OUT LOUD, JUST FOLLOW THIS BEHAVIORAL INSTRUCTION]: [instruction]` to guide character behavior without appearing in dialogue.
 
 ### Web UI
 
-The Game Manager Panel in the web interface shows:
-- **Status**: Active / Processing / Disabled
-- **Timer**: Countdown until next tick
-- **Trigger Button**: Manually trigger a tick
-- **Game Clues**: Enter hints for the GM to consider
-- **Last Thinking**: GM's last analysis
-- **Last Actions**: Last injections
-- **History**: History of all decisions
+The Game Manager Panel provides:
+- Real-time status and countdown timer
+- Manual trigger button
+- Game clues input field
+- History of all decisions and injections
 
 ---
 
 ## 💉 System Prompt Injection
 
-Inject context or instructions into characters during gameplay.
+Inject context or instructions into characters during gameplay to dynamically shape their behavior.
 
-### Two Methods
+### Methods
 
-#### 1. Direct Character Injection (Web UI)
+**1. Direct Character Injection (Web UI)**: Use the Inject field at the bottom of the chat to inject directly into the currently selected character.
 
-Use the Inject field at the bottom of the chat to inject directly into the currently selected character.
+**2. Game Manager Clues (Web UI)**: Add hints in the Game Manager Panel. The GM analyzes and decides which characters receive which instructions.
 
-**Example**: "The player just found a bloody weapon in the kitchen."
-
-#### 2. Game Manager Clues (Web UI)
-
-Add hints in the Game Manager Panel. The Game Manager analyzes these and decides itself which characters receive which instructions.
-
-**Example**: "Player checked Paul's alibi - it doesn't match"
-
-### Programmatic Injection
-
-Via WebSocket message to a character:
+**3. Programmatic (WebSocket)**:
 ```json
-{
-  "type": "inject",
-  "content": "The player just found a bloody weapon."
-}
+// Direct to character
+{"type": "inject", "content": "The player just found a bloody weapon."}
+
+// To Game Manager
+{"type": "inject_clue", "content": "Player found evidence item #3"}
 ```
 
-Via WebSocket to Game Manager:
-```json
-{
-  "type": "inject_clue",
-  "content": "Player found evidence item #3"
-}
+### Injection Format
+
+Injections are added to the character's system prompt as behavioral directives:
+```
+[DIRECTOR'S NOTE - DO NOT SAY THIS OUT LOUD, JUST FOLLOW THIS BEHAVIORAL INSTRUCTION]: [instruction]
 ```
 
-### Injection in System Prompt
-
-Injections are added to the character's system prompt:
-
-```
-[Original system prompt]
-
-[GAME]: The player just found a bloody weapon.
-[GAME]: Become more nervous when asked about the crime scene.
-```
+This ensures the LLM understands it's a behavioral directive, not dialogue to repeat.
 
 ---
 
@@ -485,59 +449,33 @@ NPCs can have conversations with each other, creating dynamic inter-character di
 
 ### Features
 
-- **Configurable Turns**: Set how many exchanges the NPCs should have
-- **Context Injection**: Provide a topic or scenario for them to discuss
-- **Graceful Endings**: NPCs naturally conclude their conversation
-- **Shared Context**: NPCs remember these conversations when talking to the player
+- **Configurable Turns**: Set how many exchanges between NPCs
+- **Context Injection**: Provide a topic or scenario for discussion
+- **Shared Memory**: Both NPCs remember the conversation when talking to the player
 - **Player Interruption**: Starting to speak automatically stops NPC conversations
+- **3D Spatial Audio**: Audio plays from each NPC's position in Unity
 
 ### Web UI Controls
 
 The NPC Conversation Panel allows you to:
-- **Select NPCs**: Choose which two characters should converse
-- **Set Turns**: Configure how many back-and-forth exchanges
-- **Inject Context**: Give them a topic (e.g., "Discuss what happened last night")
-- **Start/Stop**: Control the conversation flow
-- **View Transcript**: Watch the conversation unfold in real-time
+- Select which two characters should converse
+- Set number of turns and provide context
+- Start/stop conversations and view transcripts in real-time
 
 ### Context Awareness
 
-When NPCs converse, both characters remember the conversation:
+When NPCs converse, the conversation is stored in both characters' `inter_npc_history`. When the player later talks to either character, they have full context of what was discussed, creating a coherent world where NPCs have relationships and shared history.
 
-```
-Lisa talks to Paul → Stored in Lisa's inter_npc_history["PaulAdams"]
-                  → Stored in Paul's inter_npc_history["LisaParker"]
-```
-
-When the player later talks to Lisa, she has full context:
-
-```
-Player: "What were you and Paul talking about?"
-Lisa: "Oh, we were just discussing last night's events..."
-```
-
-This creates a coherent world where:
-- NPCs have relationships and shared history
-- Players can reference overheard conversations
-- The narrative feels interconnected and alive
-
-### Player Interruption
-
-When the player starts speaking:
-1. Any running NPC-to-NPC conversation stops immediately
-2. The interrupted NPC gives full attention to the player
-3. The conversation context is preserved for future reference
-
-### Programmatic Control
+### Programmatic Control (Web Interface)
 
 Via WebSocket to `/ws/npc_conversation`:
 
 **Start Conversation**:
 ```json
 {
-  "type": "start",
-  "npc1": "LisaParker",
-  "npc2": "PaulAdams",
+  "type": "start_conversation",
+  "npc1_id": "LisaParker",
+  "npc2_id": "PaulAdams",
   "turns": 5,
   "context": "Discuss your alibis for last night"
 }
@@ -546,29 +484,15 @@ Via WebSocket to `/ws/npc_conversation`:
 **Stop Conversation**:
 ```json
 {
-  "type": "stop"
+  "type": "stop_conversation"
 }
-```
-
-**Server Events**:
-```json
-{"type": "npc_conv_state", "state": "running", "current_turn": 2, "max_turns": 5}
-{"type": "npc_conv_turn", "speaker": "LisaParker", "message": "I was at home...", "turn": 1}
-{"type": "npc_conv_audio", "speaker": "LisaParker", "audio": "[Base64 PCM]"}
-{"type": "npc_conv_state", "state": "finished"}
 ```
 
 ---
 
 ## ⚡ Performance: Global Generation Lock
 
-With multiple "warm" NPC sessions, a global lock prevents LLM+TTS from running simultaneously for multiple characters. This:
-
-- **Prevents GPU overload** with multiple parallel generations
-- **Enables instant switching** between NPCs (< 1 second)
-- **Serializes** heavy compute tasks automatically
-
-The lock is managed transparently - from the player's perspective, it feels like instant switching between NPCs.
+A global semaphore prevents LLM+TTS from running simultaneously for multiple characters, preventing GPU overload while enabling instant switching between NPCs. The lock is managed transparently - player conversations always have priority.
 
 ---
 
@@ -587,94 +511,44 @@ The lock is managed transparently - from the player's perspective, it feels like
 
 ### Script Overview
 
-#### `LiveLlmManager.cs` – Singleton for Microphone Management
+#### `LiveLlmManager.cs` – Microphone Manager
 
-**Purpose**: Central microphone recording, distributes audio to all active characters.
+Central microphone recording singleton that distributes audio to all active characters. Automatically starts/stops recording when characters register/unregister.
 
-**Important Settings**:
-```csharp
-[SerializeField] private int sampleRate = 48_000;      // Must match server!
-[SerializeField] private int chunkSamples = 2_048;     // Samples per chunk
-[SerializeField] private string microphoneDeviceName;  // Empty = default microphone
-```
+**Key Settings**: `sampleRate = 48_000` (must match server), `chunkSamples = 2_048`
 
-**How It Works**:
-- Automatically starts microphone recording when a character registers
-- Automatically stops when no character is active
-- Sends audio chunks to all registered `LiveLlmCharacterBase` instances
+#### `LiveLlmCharacterBase.cs` – Character Base Class
 
----
-
-#### `LiveLlmCharacter.cs` (actually `LiveLlmCharacterBase`) – Character Base Class
-
-**Purpose**: WebSocket connection, TTS playback, trigger-based activation.
-
-**Important Settings**:
-```csharp
-[SerializeField] protected string characterId = "Character";  // Must match server config!
-[SerializeField] private string wsUrl = "ws://127.0.0.1:8000/ws";
-public AudioSource ttsSource;   // For TTS playback (automatically created)
-public AudioSource monitorSource; // Optional: Microphone monitoring
-public Transform player;        // Reference to player (for trigger)
-```
-
-**Automatic Behavior**:
+WebSocket connection, TTS playback, and trigger-based activation. Each character:
 - Connects automatically at `Start()`
-- Activates conversation when player enters trigger area
-- Deactivates conversation when player leaves the area
+- Activates when player enters trigger area (SphereCollider)
+- Plays TTS audio with 3D spatial audio from character's position
+- Registers in static character registry for NPC conversations
 
-**Important Methods**:
-```csharp
-StartConversation()   // Manually start conversation
-StopConversation()    // Manually end conversation
-```
+**Key Settings**: `characterId` (must match `character_config.json`), `wsUrl`, `ttsSource` (auto-created)
 
----
+#### `NpcConversationController.cs` – NPC Conversation Orchestrator
 
-#### `ExampleLiveCharacter.cs` – Example Implementation
-
-Shows how to create a concrete character:
-
-```csharp
-using UnityEngine;
-
-public class Example_LiveLLM : LiveLlmCharacterBase
-{
-    protected override void Awake()
-    {
-        characterId = "PaulAdams";  // Must exist in character_config.json!
-        base.Awake();
-    }
-}
-```
+Manages NPC-to-NPC conversations, routes audio to correct characters, and provides auto-trigger for testing. See [NPC-to-NPC Conversations in Unity](#npc-to-npc-conversations-in-unity) for details.
 
 ### Setup in Unity
 
-#### 1. Create Manager GameObject
+1. **Create Manager GameObject**:
+   - Empty GameObject → Add `LiveLlmManager.cs`
+   - Automatically becomes `DontDestroyOnLoad`
 
-1. Create empty GameObject: `GameObject > Create Empty`
-2. Rename to "LiveLlmManager"
-3. Add `LiveLlmManager.cs`
-4. **Important**: This GameObject automatically becomes `DontDestroyOnLoad`
+2. **Create Character NPC**:
+   - Place 3D model in scene
+   - Create script extending `LiveLlmCharacterBase`
+   - Set `characterId` to match `character_config.json`
+   - `SphereCollider` (trigger) and `AudioSource` are auto-created
+   - Adjust collider radius for conversation range
 
-#### 2. Create Character NPC
+3. **Configure Player**:
+   - Player GameObject must have tag `"Player"`
+   - Player needs a collider for trigger detection
 
-1. Place 3D model in the scene
-2. Create your own script (see example below)
-3. Add script to NPC
-4. **SphereCollider** is automatically added (trigger area)
-5. Adjust collider radius (conversation range)
-6. **AudioSource** for TTS is automatically created
-
-#### 3. Configure Player
-
-1. Player GameObject must have tag `"Player"`
-2. Player needs a collider for trigger detection
-
-### Creating Your Own Character
-
-Extend `LiveLlmCharacterBase` and set the `characterId` to match your `character_config.json`:
-
+**Example Character**:
 ```csharp
 public class MyCharacter : LiveLlmCharacterBase
 {
@@ -686,8 +560,6 @@ public class MyCharacter : LiveLlmCharacterBase
 }
 ```
 
-See `ExampleLiveCharacter.cs` for a complete example with trigger-based activation.
-
 ### Unity Project Settings
 
 1. **Player Settings > Other Settings**:
@@ -698,49 +570,63 @@ See `ExampleLiveCharacter.cs` for a complete example with trigger-based activati
 
 ---
 
-## Data Flow & Protocol
+### NPC-to-NPC Conversations in Unity
 
-### WebSocket Connection
+NPCs can have conversations with each other in Unity, with audio playing from their 3D positions.
 
-**URL Format**: `ws://[host]:8000/ws?characterId=[CharacterID]`
+#### Setup
 
-Example: `ws://127.0.0.1:8000/ws?characterId=LisaParker`
+1. **Add `NpcConversationController`**:
+   - Create empty GameObject: `GameObject > Create Empty`
+   - Rename to "NPCTalkingManager" (or similar)
+   - Add `NpcConversationController.cs` script
+   - Configure in Inspector:
+     - **Auto Trigger Enabled**: Enable for testing (triggers conversations automatically)
+     - **Auto Trigger Interval**: Seconds between auto-triggered conversations (default: 15)
+     - **Auto Trigger Turns**: Number of exchanges per conversation (default: 3)
+     - **Auto Trigger Characters**: Leave empty to use first two registered characters, or specify IDs like `["LisaParker", "PaulAdams"]`
+     - **Auto Trigger Context**: Topic for conversations (e.g., "Have a brief casual conversation")
 
-### Binary Messages (Client → Server)
+#### Usage
 
-Audio chunks are sent as binary data:
+**Automatic (Testing)**:
+- Enable "Auto Trigger Enabled" in Inspector
+- Conversations will start automatically at the configured interval
 
+**Manual (In-Game)**:
+```csharp
+// Trigger conversation when player enters a room
+void OnTriggerEnter(Collider other)
+{
+    if (other.CompareTag("Player"))
+    {
+        NpcConversationController.Instance.StartConversation(
+            "LisaParker",           // NPC 1
+            "PaulAdams",            // NPC 2
+            turns: 4,               // 4 exchanges
+            context: "Discuss what you heard last night"
+        );
+    }
+}
+
+// Stop conversation (e.g., player interrupts)
+NpcConversationController.Instance.StopConversation();
 ```
-┌─────────────┬─────────────┬──────────────────────┐
-│ Timestamp   │ Flags       │ PCM Audio Data       │
-│ (4 Bytes)   │ (4 Bytes)   │ (N Bytes)            │
-│ Big-Endian  │ Big-Endian  │ 16-bit Signed LE     │
-└─────────────┴─────────────┴──────────────────────┘
-```
 
-**Flags**:
-- Bit 0: `isTTSPlaying` (1 = TTS is currently playing)
+#### Features
 
-### JSON Messages
+- **3D Spatial Audio**: Audio plays from each NPC's position (configured in `LiveLlmCharacterBase`)
+- **Turn-Based Queue**: NPCs take turns speaking (no overlap)
+- **Automatic Routing**: Audio is automatically routed to the correct character's AudioSource
+- **Character Registry**: Characters automatically register when they initialize
 
-**Client → Server**:
-```json
-{"type": "tts_start", "character_id": "LisaParker"}
-{"type": "tts_stop", "character_id": "LisaParker"}
-{"type": "clear_history", "character_id": "LisaParker"}
-{"type": "set_speed", "speed": 50, "character_id": "LisaParker"}
-```
+#### Unity Events
 
-**Server → Client**:
-```json
-{"type": "partial_user_request", "content": "Hello, how...", "character_id": "LisaParker"}
-{"type": "final_user_request", "content": "Hello, how are you?", "character_id": "LisaParker"}
-{"type": "partial_assistant_answer", "content": "I'm doing...", "character_id": "LisaParker"}
-{"type": "final_assistant_answer", "content": "I'm doing well!", "character_id": "LisaParker"}
-{"type": "tts_chunk", "content": "[Base64-encoded PCM]", "character_id": "LisaParker"}
-{"type": "tts_interruption", "character_id": "LisaParker"}
-{"type": "stop_tts", "character_id": "LisaParker"}
-```
+The `NpcConversationController` provides UnityEvents for UI/animations:
+- `OnConversationTurn(string speaker, string message)` - Fires for each turn (for subtitles)
+- `OnConversationStarted()` - Conversation begins
+- `OnConversationEnded()` - Conversation finishes
+- `OnConversationStateChanged(string state)` - State updates (running/finished/error)
 
 ---
 
@@ -788,9 +674,10 @@ RealtimeVoice/
 └── RealtimeVoiceChatUnity/            # Unity Client
     └── Assets/
         └── Scripts/
-            ├── LiveLlmManager.cs      # Microphone manager (Singleton)
-            ├── LiveLlmCharacter.cs    # Character base class
-            └── ExampleLiveCharacter.cs # Example character
+            ├── LiveLlmManager.cs           # Microphone manager (Singleton)
+            ├── LiveLlmCharacter.cs         # Character base class
+            ├── NpcConversationController.cs # NPC-to-NPC conversation orchestrator
+            └── ExampleLiveCharacter.cs     # Example character
 ```
 
 ---
