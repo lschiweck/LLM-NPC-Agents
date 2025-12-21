@@ -326,6 +326,16 @@ docker compose up -d
 
 Characters are defined in `RealtimeVoiceChat/code/character_config.json`:
 
+### 3-Layer System Prompt Architecture
+
+Each character’s effective system prompt is built from **three layers**:
+
+- **Layer 1 (Framework, immutable)**: Hard rules and formatting that should **never be edited**. Defined in `RealtimeVoiceChat/code/prompt_layers.py`.
+- **Layer 2 (Personality, user-editable)**: The character’s speaking style, tone, and behavioral tendencies. Set via `personality` in `character_config.json`.
+- **Layer 3 (Game Knowledge, user-editable)**: Backstory + facts the character knows about the world/case. Set via `game_knowledge` in `character_config.json`.
+
+In other words: you customize **Layer 2 + Layer 3** in JSON; the code combines them with the immutable **Layer 1** at runtime.
+
 ```json
 {
   "LisaParker": {
@@ -707,7 +717,6 @@ RealtimeVoice/
 ## License
 
 This project is under the MIT License. However, note the licenses of the components used:
-- **Coqui TTS**: CPML (Coqui Public Model License)
 - **Ollama Models**: Varies by model (e.g., Llama License)
 - **RealtimeSTT/TTS**: MIT
 
