@@ -12,6 +12,7 @@ from text_similarity import TextSimilarity
 from text_context import TextContext
 from llm_module import LLM
 from colors import Colors
+from prompt_layers import build_character_prompt
 
 # (Logging setup)
 logger = logging.getLogger(__name__)
@@ -20,14 +21,14 @@ logger = logging.getLogger(__name__)
 # Only one full generation (LLM + TTS) is allowed at a time system-wide.
 GLOBAL_GENERATION_SEMAPHORE = threading.Semaphore(1)
 
-# (Load system prompt)
+# (Load default system prompt - used as fallback only)
 try:
     with open("system_prompt.txt", "r", encoding="utf-8") as f:
-        system_prompt = f.read().strip()
-    logger.info("🗣️📄 System prompt loaded from file.")
+        default_system_prompt = f.read().strip()
+    logger.info("🗣️📄 Default system prompt loaded from file.")
 except FileNotFoundError:
-    logger.warning("🗣️📄 system_prompt.txt not found. Using default system prompt.")
-    system_prompt = "You are a helpful assistant."
+    logger.warning("🗣️📄 system_prompt.txt not found. Using minimal default.")
+    default_system_prompt = "You are a helpful assistant."
 
 
 USE_ORPHEUS_UNCENSORED = False
@@ -131,6 +132,10 @@ class SpeechPipelineManager:
             no_think: bool = False,
             orpheus_model: str = "orpheus-3b-0.1-ft-Q8_0-GGUF/orpheus-3b-0.1-ft-q8_0.gguf",
             *,
+            # 3-Layer Prompt System (preferred)
+            personality: Optional[str] = None,
+            game_knowledge: Optional[str] = None,
+            # Legacy support - if system_prompt_override is provided, it bypasses the 3-layer system
             system_prompt_override: Optional[str] = None,
             history: Optional[List[Dict[str, str]]] = None,
             voice: Optional[str] = None,
@@ -150,6 +155,9 @@ class SpeechPipelineManager:
             llm_model: The specific LLM model identifier.
             no_think: If True, removes specific thinking tags from LLM output.
             orpheus_model: Path or identifier for the Orpheus TTS model, if used.
+            personality: Layer 2 - Character personality and traits (user-customizable).
+            game_knowledge: Layer 3 - Game-specific context (user-customizable).
+            system_prompt_override: Legacy - bypasses 3-layer system if provided.
         """
         self.tts_engine = tts_engine
         self.llm_provider = llm_provider
@@ -157,10 +165,31 @@ class SpeechPipelineManager:
         self.no_think = no_think
         self.orpheus_model = orpheus_model
         self.session_id = session_id
+        self._introduced_to_player: bool = False
+        self._director_notes: List[str] = []
 
-        self.system_prompt = (system_prompt_override.strip() if system_prompt_override else system_prompt)
+        # Build system prompt using 3-layer architecture or legacy override
+        if system_prompt_override:
+            # Legacy mode - use the override directly
+            self._base_system_prompt = system_prompt_override.strip()
+            logger.info("🗣️📄 Using legacy system_prompt_override")
+        elif personality or game_knowledge:
+            # 3-Layer mode - build from layers
+            self._base_system_prompt = build_character_prompt(
+                personality=personality or "",
+                game_knowledge=game_knowledge or ""
+            )
+            logger.info("🗣️📄 Built system prompt from 3-layer architecture")
+        else:
+            # Fallback to default
+            self._base_system_prompt = default_system_prompt
+            logger.info("🗣️📄 Using default system prompt")
+        
         if tts_engine == "orpheus":
-            self.system_prompt += f"\n{orpheus_prompt_addon}"
+            self._base_system_prompt += f"\n{orpheus_prompt_addon}"
+
+        # Build final system prompt (base + rolling director notes)
+        self.system_prompt = self._rebuild_system_prompt()
 
         # --- Instance Dependencies ---
         self.audio = AudioProcessor(
@@ -238,6 +267,28 @@ class SpeechPipelineManager:
         # Use a shared semaphore so only one character/session generates at a time.
         self._global_generation_lock = GLOBAL_GENERATION_SEMAPHORE
         self._has_global_generation_lock = False
+
+    def mark_introduced_to_player(self):
+        """Mark that this NPC has already introduced themselves to the detective in this session."""
+        self._introduced_to_player = True
+
+    def reset_introduction(self):
+        """Reset the introduction state (used when resetting/starting a fresh session)."""
+        self._introduced_to_player = False
+
+    def _rebuild_system_prompt(self) -> str:
+        """
+        Build the effective system prompt.
+        We PREPEND the rolling director notes so they stay high-salience and do not get diluted.
+        """
+        if not self._director_notes:
+            return self._base_system_prompt
+
+        notes = "\n".join([f"- {n.strip()}" for n in self._director_notes if n and n.strip()])
+        if not notes:
+            return self._base_system_prompt
+
+        return f"[DIRECTOR]: {notes}\n\n{self._base_system_prompt}"
 
     def _release_global_generation_lock_if_held(self):
         """Safely release the global generation semaphore if held by this instance."""
@@ -1103,6 +1154,12 @@ class SpeechPipelineManager:
         self.abort_generation(wait_for_completion=True, timeout=7.0, reason="reset") # Ensure clean slate
         self.history = []
         self.inter_npc_history = {}
+        self._director_notes = []
+        self.system_prompt = self._rebuild_system_prompt()
+        if self.llm:
+            self.llm.system_prompt = self.system_prompt
+            self.llm.system_prompt_message = {"role": "system", "content": self.system_prompt}
+        self.reset_introduction()
         logger.info("🗣️🧹 History cleared. Reset complete.")
 
     def _build_combined_history(self) -> List[dict]:
@@ -1140,6 +1197,14 @@ class SpeechPipelineManager:
                 combined.append({"role": "assistant", "content": "I understand and remember these conversations."})
         
         # Then add the player conversation history
+        # One-time introduction for first contact with the detective in this session.
+        # This keeps onboarding consistent without repeating introductions every turn.
+        if not self._introduced_to_player and not self.history:
+            combined.append({
+                "role": "user",
+                "content": "First contact in this session. Start your next reply with one natural sentence that introduces who you are (your name and relationship to David). Then answer normally."
+            })
+
         combined.extend(self.history)
         
         return combined
@@ -1157,14 +1222,19 @@ class SpeechPipelineManager:
         Returns:
             The formatted injection string that was added.
         """
-        injection = f"\n\n[DIRECTOR'S NOTE - DO NOT SAY THIS OUT LOUD, JUST FOLLOW THIS BEHAVIORAL INSTRUCTION]: {content}"
-        self.system_prompt += injection
-        # Also update the LLM's system prompt
+        # Rolling director notes to prevent unbounded system-prompt growth and keep notes high priority.
+        note = content.strip()
+        if note:
+            self._director_notes.append(note)
+            # Keep the most recent notes only
+            self._director_notes = self._director_notes[-3:]  # Keep only 3 most recent
+
+        self.system_prompt = self._rebuild_system_prompt()
         if self.llm:
             self.llm.system_prompt = self.system_prompt
             self.llm.system_prompt_message = {"role": "system", "content": self.system_prompt}
         logger.info(f"🗣️💉 Injected context: {content}")
-        return injection
+        return note
 
     def shutdown(self):
         """

@@ -1313,6 +1313,12 @@ class TranscriptionCallbacks:
                     })
                 if self.session.pipeline:
                     self.session.pipeline.history.append({"role": "assistant", "content": cleaned_answer})
+                    # Mark first-contact introduction as done (3-layer prompt feature)
+                    if hasattr(self.session.pipeline, "mark_introduced_to_player"):
+                        try:
+                            self.session.pipeline.mark_introduced_to_player()
+                        except Exception:
+                            pass
                 self.final_assistant_answer_sent = True
                 self.final_assistant_answer = cleaned_answer # Store the sent answer
             else:
@@ -1379,7 +1385,13 @@ async def websocket_endpoint(ws: WebSocket):
         )
 
     if session.pipeline is None:
-        system_prompt = session.config.get("system_prompt")
+        # 3-Layer Prompt System: personality (Layer 2) + game_knowledge (Layer 3)
+        # Layer 1 (Framework) is built-in to prompt_layers.py
+        personality = session.config.get("personality")
+        game_knowledge = session.config.get("game_knowledge")
+        # Legacy support: use system_prompt if no 3-layer fields
+        system_prompt = session.config.get("system_prompt") if not personality and not game_knowledge else None
+        
         history = session.config.get("history", [])
         session.pipeline = SpeechPipelineManager(
             tts_engine=session.config.get("tts_engine", DEFAULT_ENGINE),
@@ -1387,6 +1399,8 @@ async def websocket_endpoint(ws: WebSocket):
             llm_model=session.config.get("llm_model", DEFAULT_LLM_MODEL),
             no_think=session.config.get("no_think", DEFAULT_NO_THINK),
             orpheus_model=session.config.get("orpheus_model", DEFAULT_ORPHEUS_MODEL),
+            personality=personality,
+            game_knowledge=game_knowledge,
             system_prompt_override=system_prompt,
             history=history,
             voice=session.config.get("voice"),

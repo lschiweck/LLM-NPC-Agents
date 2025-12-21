@@ -8,6 +8,7 @@ single-character monologues.
 
 import asyncio
 import logging
+import re
 from dataclasses import dataclass, field
 from typing import Optional, Callable, Dict, List, Any
 from enum import Enum
@@ -277,30 +278,47 @@ class NPCConversationOrchestrator:
         pipeline = self.get_pipeline(speaker_id)
         if not pipeline:
             return None
-        
-        # Build the prompt for this turn
-        prompt_parts = []
-        
-        # Add conversation context for first turn
-        if is_first_turn and context:
+
+        def build_turn_prompt() -> str:
+            """
+            Build a prompt for NPC-to-NPC turns that strongly discourages
+            screenplay-style multi-speaker output.
+            """
+            parts: List[str] = []
+
+            # Hard constraints (we also enforce again via post-processing)
+            parts.append(
+                "IMPORTANT RULES (DO NOT SAY THESE OUT LOUD): "
+                "Reply as ONE speaker only. Output ONLY what YOU say. "
+                "Do NOT write the other person's dialogue. "
+                "Do NOT include any name prefixes like 'Lisa:' or 'Paul:'. "
+                "Keep it to 1–2 short sentences."
+            )
+
             if listener_id:
-                prompt_parts.append(f"[Start a conversation with {listener_id} about: {context}]")
+                parts.append(f"You are {speaker_id}. You are talking to {listener_id}.")
             else:
-                prompt_parts.append(f"[Make a statement about: {context}]")
+                parts.append(f"You are {speaker_id}.")
+
+            if is_first_turn and context:
+                if listener_id:
+                    parts.append(f"Start the conversation about: {context}")
+                else:
+                    parts.append(f"Make a short statement about: {context}")
+
+            if not is_first_turn and listener_id and self.state.conversation_history:
+                last_turn = self.state.conversation_history[-1]
+                # Avoid speaker labels in the prompt to prevent scripted output
+                parts.append(f'They just said: "{last_turn.message}"')
+
+            if is_last_turn:
+                parts.append("Wrap it up naturally in one short sentence.")
+
+            return " ".join([p.strip() for p in parts if p and p.strip()])
         
-        # Add what the other person just said (if not first turn and not monologue)
-        if not is_first_turn and listener_id and self.state.conversation_history:
-            last_turn = self.state.conversation_history[-1]
-            prompt_parts.append(f"{last_turn.speaker_id} said: \"{last_turn.message}\"")
+        prompt = build_turn_prompt()
         
-        # Add hint for last turn
-        if is_last_turn:
-            prompt_parts.append("[This is your last response in this conversation - wrap it up naturally]")
-        
-        # Combine prompt
-        prompt = " ".join(prompt_parts) if prompt_parts else "[Continue the conversation]"
-        
-        logger.info(f"🎭 Generating response for {speaker_id}: {prompt[:100]}...")
+        logger.info(f"🎭 Generating response for {speaker_id}: {prompt[:120]}...")
         
         try:
             # Use the pipeline's LLM to generate response
@@ -336,8 +354,57 @@ class NPCConversationOrchestrator:
         """Generate LLM response (runs in thread)."""
         try:
             logger.info(f"🎭 LLM generating for {speaker_id}: {prompt[:80]}...")
+
+            def _truncate_sentences(text: str, max_sentences: int = 2) -> str:
+                t = re.sub(r"\s+", " ", (text or "").strip())
+                if not t:
+                    return ""
+                # Split on sentence boundaries; keep punctuation.
+                parts = re.split(r"(?<=[.!?])\s+", t)
+                parts = [p.strip() for p in parts if p and p.strip()]
+                if not parts:
+                    return t
+                return " ".join(parts[:max_sentences]).strip()
+
+            def _sanitize_single_speaker(text: str) -> str:
+                """
+                Remove scripted multi-speaker formatting.
+                Keep ONLY the first speaker's utterance and strip any name prefixes.
+                """
+                t = (text or "").strip()
+                if not t:
+                    return ""
+
+                # Strip surrounding quotes
+                if (t.startswith('"') and t.endswith('"')) or (t.startswith("“") and t.endswith("”")):
+                    t = t[1:-1].strip()
+
+                # Cut at first newline (screenplay formatting often uses multiple lines)
+                t = t.splitlines()[0].strip()
+
+                # If model wrote multiple speakers inline, cut at the first occurrence of any speaker label
+                # for the *other* character.
+                if listener_id:
+                    # e.g. "PaulAdams: ... LisaParker: ..."
+                    idx = t.lower().find(f"{listener_id.lower()}:")
+                    if idx != -1:
+                        t = t[:idx].strip()
+
+                # Remove leading "Speaker:" labels (either speaker_id or generic)
+                t = re.sub(rf"^\s*{re.escape(speaker_id)}\s*:\s*", "", t, flags=re.IGNORECASE)
+                t = re.sub(r"^\s*[A-Za-z0-9_]+\s*:\s*", "", t)
+
+                # If the listener label still appears later, cut before it (fallback)
+                if listener_id:
+                    m = re.search(rf"\b{re.escape(listener_id)}\s*:", t, flags=re.IGNORECASE)
+                    if m:
+                        t = t[: m.start()].strip()
+
+                return t.strip()
             
-            # Build a temporary history for this inter-NPC conversation
+            # Build a temporary history for this inter-NPC conversation.
+            # IMPORTANT: Do NOT prefix turns with speaker IDs here. That nudges the model into
+            # screenplay-style outputs ("Paul: ... Lisa: ...") in a single completion.
             history = []
             
             # Add recent conversation turns as context
@@ -345,24 +412,38 @@ class NPCConversationOrchestrator:
                 if turn.speaker_id == speaker_id:
                     history.append({"role": "assistant", "content": turn.message})
                 else:
-                    history.append({"role": "user", "content": f"{turn.speaker_id}: {turn.message}"})
+                    # Treat the other NPC as the "user" without labels.
+                    history.append({"role": "user", "content": turn.message})
             
             logger.info(f"🎭 History for {speaker_id}: {len(history)} messages")
             
             # Generate response - run directly without semaphore
             # NPC conversations run independently of player conversations
+            # Keep NPC-to-NPC turns short and snappy.
+            # Ollama supports num_predict; OpenAI/LMStudio will ignore unknown options safely.
             full_response = ""
-            for chunk in pipeline.llm.generate(text=prompt, history=history, use_system_prompt=True):
+            for chunk in pipeline.llm.generate(
+                text=prompt,
+                history=history,
+                use_system_prompt=True,
+                num_predict=90,
+                temperature=0.6,
+                stop=[
+                    "\n",
+                    f"{speaker_id}:",
+                    f"{listener_id}:" if listener_id else "",
+                ],
+            ):
                 full_response += chunk
             
             logger.info(f"🎭 LLM response for {speaker_id}: {full_response[:100]}...")
             
-            # Clean up the response
-            full_response = full_response.strip()
-            if full_response.startswith('"') and full_response.endswith('"'):
-                full_response = full_response[1:-1]
-            
-            return full_response
+            # Clean + hard-enforce single-speaker short output.
+            cleaned = _sanitize_single_speaker(full_response)
+            cleaned = _truncate_sentences(cleaned, max_sentences=2)
+
+            logger.info(f"🎭 Cleaned response for {speaker_id}: {cleaned[:120]}...")
+            return cleaned
             
         except Exception as e:
             logger.error(f"🎭 LLM generation error for {speaker_id}: {e}", exc_info=True)

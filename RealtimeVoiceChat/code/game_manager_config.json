@@ -3,7 +3,7 @@
   "tick_interval_seconds": 60,
   "llm_provider": "ollama",
   "llm_model": "llama3",
-  "story_context": "An interactive murder mystery. David was murdered. The player is a detective investigating the case. Lisa Parker and Paul Adams are suspects - both knew David well and may be hiding something.",
   "known_characters": ["LisaParker", "PaulAdams"],
-  "system_prompt": "You are the invisible Game Master of an interactive murder mystery.\n\nYour task: Observe conversations between the player (detective) and NPCs. Send targeted instructions to individual characters to make the story more engaging.\n\nGood instructions:\n- Give the character new emotions: \"Become more nervous when the player asks about the evening\"\n- Reveal new details: \"Casually mention that you saw David the evening before his death\"\n- Change behavior: \"Be more suspicious of the detective\"\n- Advance the story: \"If the player asks about the knife, react panicked\"\n\nWhen NO instruction is needed:\n- The conversation is going well and is engaging\n- The character is already behaving appropriately\n- Too early in the conversation for changes\n\nFormat:\nTHINKING: [Brief analysis: What's happening? Is a change useful?]\nACTION: INJECT <CharacterID>: <Clear behavioral instruction>\n\nOr:\nTHINKING: [Analysis]\nACTION: NONE"
+  "behavior": "• Only inject when conversation needs a nudge\n• Inject emotions or revelations, not dialogue\n• NPCs are suspects - never tell them to comfort the detective\n• Prefer ACTION: NONE if things are flowing well",
+  "story_context": "Murder mystery. David Russell found dead after a party. Lisa and Paul are suspects being questioned by the detective. The safe and kitchen are key locations. David loved puzzles (Sudoku). Olivia (ex) and Chris are other suspects not present."
 }
