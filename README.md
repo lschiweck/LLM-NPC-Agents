@@ -333,7 +333,8 @@ Characters are defined in `RealtimeVoiceChat/code/character_config.json`:
     "tts_engine": "kokoro",
     "voice": "af_heart",
     "reference_audio": "reference_audio.wav",
-    "system_prompt": "You are Lisa Parker...",
+    "personality": "Lisa Parker, late 20s. Snappy dry humor, casual speech...",
+    "game_knowledge": "David was your childhood best friend... Don't give puzzle solutions.",
     "persist_history": false,
     "history": []
   },
@@ -341,7 +342,8 @@ Characters are defined in `RealtimeVoiceChat/code/character_config.json`:
     "display_name": "Paul Adams",
     "tts_engine": "kokoro",
     "voice": "am_fenrir",
-    "system_prompt": "You are Paul Adams...",
+    "personality": "Paul Adams, early 30s, journalist. Calm, observant...",
+    "game_knowledge": "David was your university friend... Don't give puzzle solutions.",
     "persist_history": false,
     "history": []
   }
@@ -356,7 +358,8 @@ Characters are defined in `RealtimeVoiceChat/code/character_config.json`:
 | `tts_engine` | TTS engine | `"kokoro"`, `"coqui"`, `"orpheus"` |
 | `voice` | Voice ID | `"af_heart"` (Kokoro), `"v2/de_DE/..."` (Coqui) |
 | `reference_audio` | Audio for voice cloning | `"my_voice.wav"` |
-| `system_prompt` | Character personality | Any text |
+| `personality` | Layer 2 (user-editable): how the character speaks/behaves | Any text |
+| `game_knowledge` | Layer 3 (user-editable): backstory + facts they know | Any text |
 | `llm_provider` | LLM backend (optional) | `"ollama"`, `"openai"` |
 | `llm_model` | Model name (optional) | `"llama3"`, `"gpt-4"` |
 | `persist_history` | Save history | `true`/`false` |
@@ -390,9 +393,9 @@ The Game Manager is an AI "game master" that runs in the background and orchestr
   "tick_interval_seconds": 30,
   "llm_provider": "ollama",
   "llm_model": "llama3",
-  "story_context": "This is an interactive mystery. The player is a detective.",
   "known_characters": ["LisaParker", "PaulAdams"],
-  "system_prompt": "You are the invisible game master of an interactive mystery..."
+  "behavior": "Rules for when/how to inject (one short sentence per injection)...",
+  "story_context": "Murder mystery background and current state..."
 }
 ```
 
@@ -404,9 +407,9 @@ The Game Manager is an AI "game master" that runs in the background and orchestr
 | `tick_interval_seconds` | Time between analysis cycles | `30` |
 | `llm_provider` | LLM backend for GM | `"ollama"` |
 | `llm_model` | Model for GM | `"llama3"` |
-| `story_context` | Background story info | `""` |
 | `known_characters` | List of character IDs | `[]` |
-| `system_prompt` | Instructions for the GM | `"..."` |
+| `behavior` | Layer 2 (user-editable): GM behavior + injection policy | `""` |
+| `story_context` | Layer 3 (user-editable): story facts + current state | `""` |
 
 ### How It Works
 
@@ -470,6 +473,8 @@ NPCs can have conversations with each other, creating dynamic inter-character di
 - **Shared Memory**: Both NPCs remember the conversation when talking to the player
 - **Player Interruption**: Starting to speak automatically stops NPC conversations
 - **3D Spatial Audio**: Audio plays from each NPC's position in Unity
+- **Single-Speaker Turns (no “script mode”)**: Each turn is forced to be only the current speaker (no `Paul: ... Lisa: ...` in one message)
+- **Short Turns**: NPC-to-NPC replies are constrained to ~1–2 sentences per turn for natural pacing and fast generation
 
 ### Web UI Controls
 
@@ -676,7 +681,8 @@ RealtimeVoice/
 │   │   ├── turndetect.py              # Speech pause detection
 │   │   ├── character_config.json      # Character definitions
 │   │   ├── game_manager_config.json   # 🎮 Game Manager Config
-│   │   ├── system_prompt.txt          # Default system prompt
+│   │   ├── prompt_layers.py           # Immutable prompt framework (Layer 1)
+│   │   ├── system_prompt.txt          # Legacy/default prompt (optional)
 │   │   └── static/                    # Web interface
 │   │       ├── index.html             # UI with NPC Conversation Panel
 │   │       ├── app.js                 # Client logic + NPC conv integration
