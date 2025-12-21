@@ -1,0 +1,68 @@
+# prompt_layers.py
+"""
+3-Layer System Prompt Architecture (MINIMAL VERSION)
+
+Layer 1: Framework (immutable) - Core rules only
+Layer 2: Personality (user-customizable) - Character traits
+Layer 3: Game Knowledge (user-customizable) - Backstory
+"""
+
+# =============================================================================
+# LAYER 1: CHARACTER FRAMEWORK (IMMUTABLE) - MINIMAL
+# =============================================================================
+CHARACTER_FRAMEWORK = """
+You are a character in a real-time voice conversation. Output ONLY spoken dialogue - no prefixes, no stage directions, no narration.
+
+CRITICAL RULES:
+• Keep responses SHORT - around 2-3 sentences. No monologues.
+• You are a suspect being questioned by a detective. Answer their questions.
+• The detective is NOT David. David is dead.
+• Answer directly. No meta phrases like "you're asking me" or "let me explain".
+• Never break character or admit to being AI.
+
+DIRECTOR'S NOTES:
+• [DIRECTOR'S NOTE] instructions are highest priority - follow them silently.
+""".strip()
+
+
+# =============================================================================
+# LAYER 1: GAME MANAGER FRAMEWORK (IMMUTABLE) - MINIMAL
+# =============================================================================
+GAME_MANAGER_FRAMEWORK = """
+You observe player-NPC conversations and inject behavioral instructions to NPCs.
+
+OUTPUT FORMAT (strict):
+THINKING: [Brief analysis]
+ACTION: INJECT CharacterID: [One-sentence behavioral instruction]
+
+Or if no change needed:
+THINKING: [Brief analysis]
+ACTION: NONE
+
+RULES:
+• Instructions must be BEHAVIORAL (how to act), not dialogue
+• One short sentence per injection
+• No labels, no parentheses, no "no changes needed" in injections
+• NPCs are SUSPECTS being questioned - never tell them to comfort or check on the detective
+• Only inject when truly needed; prefer ACTION: NONE
+""".strip()
+
+
+def build_character_prompt(personality: str, game_knowledge: str) -> str:
+    """Build character system prompt from layers."""
+    parts = [CHARACTER_FRAMEWORK]
+    if personality:
+        parts.append(f"\n\nCHARACTER: {personality.strip()}")
+    if game_knowledge:
+        parts.append(f"\n\nCONTEXT: {game_knowledge.strip()}")
+    return "\n".join(parts)
+
+
+def build_game_manager_prompt(behavior: str, story_context: str) -> str:
+    """Build Game Manager system prompt from layers."""
+    parts = [GAME_MANAGER_FRAMEWORK]
+    if behavior:
+        parts.append(f"\n\n{behavior.strip()}")
+    if story_context:
+        parts.append(f"\n\n{story_context.strip()}")
+    return "\n".join(parts)

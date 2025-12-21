@@ -16,6 +16,7 @@ from typing import Dict, List, Any, Optional, Callable
 from dataclasses import dataclass, field
 
 from llm_module import LLM
+from prompt_layers import build_game_manager_prompt
 
 logger = logging.getLogger(__name__)
 
@@ -99,12 +100,29 @@ class GameManager:
             return {"enabled": False}
     
     def _init_llm(self):
-        """Initialize the LLM for the game manager."""
+        """Initialize the LLM for the game manager using 3-layer prompt architecture."""
         try:
+            # Build system prompt from 3-layer architecture
+            # Layer 1 (Framework) is in prompt_layers.py
+            # Layer 2 (Behavior) and Layer 3 (Story Context) come from config
+            behavior = self.config.get("behavior", "")
+            story_context = self.config.get("story_context", "")
+            
+            # Legacy support: if old "system_prompt" key exists, use it directly
+            if "system_prompt" in self.config and not behavior and not story_context:
+                system_prompt = self.config.get("system_prompt", "You are a game master.")
+                logger.info("🎮📄 Using legacy system_prompt from config")
+            else:
+                system_prompt = build_game_manager_prompt(
+                    behavior=behavior,
+                    story_context=story_context
+                )
+                logger.info("🎮📄 Built system prompt from 3-layer architecture")
+            
             self.llm = LLM(
                 backend=self.config.get("llm_provider", "ollama"),
                 model=self.config.get("llm_model", "llama3"),
-                system_prompt=self.config.get("system_prompt", "You are a game master."),
+                system_prompt=system_prompt,
             )
             logger.info(f"🎮🧠 Game Manager LLM initialized: {self.config.get('llm_model')}")
         except Exception as e:
@@ -158,48 +176,46 @@ class GameManager:
         self._broadcast_state()
     
     def _build_prompt(self, character_histories: Dict[str, List[Dict]]) -> str:
-        """Build the prompt for the Game Manager LLM."""
-        story_context = self.config.get("story_context", "")
+        """Build the per-tick prompt for the Game Manager LLM (not the system prompt)."""
         known_characters = self.config.get("known_characters", [])
         
         prompt_parts = [
-            "=== STORY KONTEXT ===",
-            story_context,
-            "",
-            "=== BEKANNTE CHARAKTERE ===",
-            ", ".join(known_characters),
+            "=== CURRENT STATUS ===",
+            f"Known Characters: {', '.join(known_characters)}",
             "",
         ]
         
         # Add game clues if any
         if self.state.clues:
             prompt_parts.extend([
-                "=== SPIELHINWEISE (vom Spiel gemeldet) ===",
+                "=== GAME CLUES (events reported by the game) ===",
                 *[f"• {clue}" for clue in self.state.clues],
                 "",
             ])
         
-        prompt_parts.append("=== GESPRÄCHE MIT DEM SPIELER ===")
+        prompt_parts.append("=== RECENT CONVERSATIONS WITH PLAYER ===")
         
         for char_id, history in character_histories.items():
             prompt_parts.append(f"\n--- {char_id} ---")
             if not history:
-                prompt_parts.append("(Noch kein Gespräch)")
+                prompt_parts.append("(No conversation yet)")
             else:
                 for msg in history[-20:]:  # Last 20 messages per character
                     role = msg.get("role", "unknown")
                     content = msg.get("content", "")
                     if role == "user":
-                        prompt_parts.append(f"SPIELER: {content}")
+                        prompt_parts.append(f"PLAYER: {content}")
                     elif role == "assistant":
                         prompt_parts.append(f"{char_id}: {content}")
         
         prompt_parts.extend([
             "",
-            "=== DEINE AUFGABE ===",
-            "Analysiere die Gespräche und die Spielhinweise.",
-            "Entscheide ob ein Charakter neue Instruktionen braucht basierend auf den Hinweisen.",
-            "Halte die Story spannend und kohärent.",
+            "=== YOUR TASK ===",
+            "Analyze the conversations and any game clues above.",
+            "Decide if any character needs new behavioral instructions.",
+            "Keep the story engaging and coherent.",
+            "",
+            "Remember: Output format must be THINKING: [analysis] then ACTION: INJECT CharacterID: [instruction] or ACTION: NONE",
         ])
         
         return "\n".join(prompt_parts)
@@ -214,6 +230,22 @@ class GameManager:
         """
         thinking = ""
         actions = []
+
+        def normalize_instruction(text: str) -> str:
+            t = (text or "").strip()
+            if not t:
+                return ""
+            # Remove parenthetical asides (GM prompt disallows them, but be robust)
+            t = re.sub(r"\([^)]*\)", "", t).strip()
+            # Strip common label-y prefixes if the model still emits them
+            # (Keep generic; no examples)
+            t = re.sub(r"^(?:OBSERVE|WATCHFUL|NOTE|NOTES|REMINDER|FOCUS)\b\s*[:\-–—]*\s*", "", t, flags=re.IGNORECASE)
+            # Normalize whitespace
+            t = re.sub(r"\s+", " ", t).strip()
+            # Drop instructions that explicitly say nothing should change
+            if re.search(r"\bno\s+changes?\s+needed\b", t, re.IGNORECASE):
+                return ""
+            return t
         
         # Extract THINKING
         thinking_match = re.search(r"THINKING:\s*(.+?)(?=ACTION:|$)", response, re.DOTALL | re.IGNORECASE)
@@ -224,7 +256,7 @@ class GameManager:
         inject_pattern = r"INJECT\s+(\w+):\s*(.+?)(?=INJECT|ACTION:|$)"
         for match in re.finditer(inject_pattern, response, re.DOTALL | re.IGNORECASE):
             target = match.group(1).strip()
-            instruction = match.group(2).strip()
+            instruction = normalize_instruction(match.group(2))
             if instruction and target:
                 actions.append({"target": target, "instruction": instruction})
         
