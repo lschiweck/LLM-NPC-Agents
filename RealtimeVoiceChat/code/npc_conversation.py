@@ -407,7 +407,22 @@ class NPCConversationOrchestrator:
             # screenplay-style outputs ("Paul: ... Lisa: ...") in a single completion.
             history = []
             
-            # Add recent conversation turns as context
+            # FIRST: Add context about what this NPC told the detective (player)
+            # This ensures NPCs remember their player conversations when talking to each other
+            if hasattr(pipeline, 'history') and pipeline.history:
+                player_context_parts = []
+                for msg in pipeline.history[-8:]:  # Last 8 messages with player
+                    if msg.get("role") == "assistant":
+                        player_context_parts.append(f"You said: {msg['content']}")
+                    else:
+                        player_context_parts.append(f"Detective asked: {msg['content']}")
+                
+                if player_context_parts:
+                    player_summary = "[CONTEXT - Your recent conversation with the detective. Remember this and stay consistent:]\n" + "\n".join(player_context_parts)
+                    history.append({"role": "user", "content": player_summary})
+                    history.append({"role": "assistant", "content": "I remember what I told the detective and will stay consistent."})
+            
+            # THEN: Add recent NPC-to-NPC conversation turns as context
             for turn in self.state.conversation_history[-6:]:  # Last 6 turns for context
                 if turn.speaker_id == speaker_id:
                     history.append({"role": "assistant", "content": turn.message})

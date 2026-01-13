@@ -280,15 +280,27 @@ class SpeechPipelineManager:
         """
         Build the effective system prompt.
         We PREPEND the rolling director notes so they stay high-salience and do not get diluted.
+        Uses [DIRECTOR'S NOTE] format which matches the framework's high-priority instruction marker.
         """
+        if not self._base_system_prompt:
+            return self._base_system_prompt
+
         if not self._director_notes:
             return self._base_system_prompt
 
-        notes = "\n".join([f"- {n.strip()}" for n in self._director_notes if n and n.strip()])
-        if not notes:
+        # Format each note as a [DIRECTOR'S NOTE] for maximum clarity
+        # Make it VERY clear this is meta-information, not player input
+        notes_formatted = "\n".join([
+            f"⚠️ [DIRECTOR'S NOTE]: {n.strip()} ← YOU MUST DO THIS IN YOUR NEXT RESPONSE" 
+            for n in self._director_notes if n and n.strip()
+        ])
+        if not notes_formatted:
             return self._base_system_prompt
 
-        return f"[DIRECTOR]: {notes}\n\n{self._base_system_prompt}"
+        # Place director notes at the TOP with URGENT framing
+        header = "🚨 MANDATORY INSTRUCTIONS (FOLLOW IN YOUR NEXT RESPONSE) 🚨"
+        footer = "🚨 END MANDATORY INSTRUCTIONS - FAILURE TO COMPLY BREAKS THE SCENE 🚨"
+        return f"{header}\n{notes_formatted}\n{footer}\n\n{self._base_system_prompt}"
 
     def _release_global_generation_lock_if_held(self):
         """Safely release the global generation semaphore if held by this instance."""
@@ -1164,10 +1176,13 @@ class SpeechPipelineManager:
 
     def _build_combined_history(self) -> List[dict]:
         """
-        Build combined history including NPC-to-NPC conversations.
+        Build combined history including NPC-to-NPC conversations and director notes.
         
         The player witnesses NPC-to-NPC conversations in the game, so this character
         should remember what they discussed with other NPCs when talking to the player.
+        
+        Director notes are ALSO injected into history (not just system prompt) for
+        better LLM compliance - models pay more attention to recent conversation context.
         
         Returns:
             Combined history list for LLM context.
@@ -1207,6 +1222,15 @@ class SpeechPipelineManager:
 
         combined.extend(self.history)
         
+        # IMPORTANT: Add director notes as a final "reminder" right before the user's new message
+        # This puts them in the LLM's immediate attention window for better compliance
+        if self._director_notes:
+            notes_reminder = "🎬 DIRECTOR REMINDER (act on this NOW): " + " | ".join([
+                n.strip() for n in self._director_notes if n and n.strip()
+            ])
+            combined.append({"role": "user", "content": notes_reminder})
+            combined.append({"role": "assistant", "content": "Understood, I will do this."})
+        
         return combined
 
     def inject(self, content: str) -> str:
@@ -1234,6 +1258,8 @@ class SpeechPipelineManager:
             self.llm.system_prompt = self.system_prompt
             self.llm.system_prompt_message = {"role": "system", "content": self.system_prompt}
         logger.info(f"🗣️💉 Injected context: {content}")
+        logger.info(f"🗣️💉 Current director notes ({len(self._director_notes)}): {self._director_notes}")
+        logger.info(f"🗣️💉 System prompt now starts with: {self.system_prompt[:200]}...")
         return note
 
     def shutdown(self):
