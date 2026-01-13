@@ -1,0 +1,41 @@
+{
+  "server": {
+    "host": "0.0.0.0",
+    "port": 8000,
+    "use_ssl": false
+  },
+
+  "initialization": {
+    "pre_init_pipelines": true,
+    "pre_init_mode": "all",
+    "pre_init_character_ids": [],
+    "comment": "pre_init_mode: 'all' = load all characters from character_config.json, 'specific' = only load IDs in pre_init_character_ids, 'none' = disable pre-init"
+  },
+
+  "defaults": {
+    "tts_engine": "kokoro",
+    "orpheus_model": "orpheus-3b-0.1-ft-Q8_0-GGUF/orpheus-3b-0.1-ft-q8_0.gguf",
+    "llm_provider": "ollama",
+    "llm_model": "llama3",
+    "no_think": false,
+    "language": "en"
+  },
+
+  "logging": {
+    "enabled": true,
+    "output_dir": "./conversation_logs",
+    "log_player_utterances": true,
+    "log_npc_responses": true,
+    "log_processing_times": true,
+    "log_injections": true,
+    "log_npc_conversations": true,
+    "log_director_notes": true,
+    "log_format": "jsonl",
+    "comment": "Set enabled to false to disable all conversation logging"
+  },
+
+  "game_manager": {
+    "config_file": "game_manager_config.json",
+    "comment": "Game manager has its own config file for story-specific settings"
+  }
+}

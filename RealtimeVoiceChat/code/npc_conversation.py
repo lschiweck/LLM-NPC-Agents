@@ -9,9 +9,12 @@ single-character monologues.
 import asyncio
 import logging
 import re
+import time
 from dataclasses import dataclass, field
 from typing import Optional, Callable, Dict, List, Any
 from enum import Enum
+
+from conversation_logger import get_conversation_logger
 
 logger = logging.getLogger(__name__)
 
@@ -166,6 +169,18 @@ class NPCConversationOrchestrator:
         logger.info(f"🎭 Starting NPC conversation: {config.npc1_id} {'↔ ' + config.npc2_id if config.npc2_id else '(monologue)'}, {config.total_turns} turns")
         self._notify_state_update()
         
+        # Log conversation start
+        conv_logger = get_conversation_logger()
+        if conv_logger:
+            participants = [config.npc1_id]
+            if config.npc2_id:
+                participants.append(config.npc2_id)
+            conv_logger.log_npc_conversation_start(
+                participants=participants,
+                context=config.context,
+                total_turns=config.total_turns
+            )
+        
         # Start conversation loop in background
         self._conversation_task = asyncio.create_task(self._conversation_loop())
         return True
@@ -198,7 +213,8 @@ class NPCConversationOrchestrator:
                 logger.info(f"🎭 Turn {self.state.current_turn}/{config.total_turns}: {speaker_id} speaks" + 
                            (f" (last turn)" if is_last_turn else "") + f", listener: {listener_id}")
                 
-                # Generate the response
+                # Generate the response (with timing)
+                llm_start = time.time()
                 turn = await self._generate_turn(
                     speaker_id=speaker_id,
                     listener_id=listener_id,
@@ -206,6 +222,7 @@ class NPCConversationOrchestrator:
                     is_last_turn=is_last_turn,
                     context=config.context if self.state.current_turn == 1 else None
                 )
+                llm_time_ms = (time.time() - llm_start) * 1000
                 
                 if turn is None:
                     logger.error("🎭 Failed to generate turn")
@@ -218,12 +235,27 @@ class NPCConversationOrchestrator:
                 # Update inter-NPC history for both characters
                 await self._update_inter_npc_history(speaker_id, listener_id, turn.message)
                 
-                # Generate TTS and notify
+                # Generate TTS and notify (with timing)
+                tts_start = time.time()
                 audio_bytes = None
                 try:
                     audio_bytes = await self._generate_tts(speaker_id, turn.message)
                 except Exception as e:
                     logger.error(f"🎭 TTS failed for {speaker_id}: {e}")
+                tts_time_ms = (time.time() - tts_start) * 1000
+                
+                # Log the turn
+                conv_logger = get_conversation_logger()
+                if conv_logger:
+                    conv_logger.log_npc_conversation_turn(
+                        speaker_id=speaker_id,
+                        listener_id=listener_id,
+                        message=turn.message,
+                        turn_number=self.state.current_turn,
+                        context=config.context if self.state.current_turn == 1 else None,
+                        llm_time_ms=llm_time_ms,
+                        tts_time_ms=tts_time_ms
+                    )
                 
                 # Notify even if TTS failed (text still shows)
                 if self.on_turn_complete:
@@ -252,6 +284,18 @@ class NPCConversationOrchestrator:
             # Conversation finished
             self.state.state = ConversationState.FINISHED
             logger.info(f"🎭 NPC conversation finished after {len(self.state.conversation_history)} turns")
+            
+            # Log conversation end
+            conv_logger = get_conversation_logger()
+            if conv_logger:
+                participants = [config.npc1_id]
+                if config.npc2_id:
+                    participants.append(config.npc2_id)
+                conv_logger.log_npc_conversation_end(
+                    participants=participants,
+                    turns_completed=len(self.state.conversation_history),
+                    was_stopped=self._stop_requested
+                )
             
             if self.on_conversation_end:
                 try:

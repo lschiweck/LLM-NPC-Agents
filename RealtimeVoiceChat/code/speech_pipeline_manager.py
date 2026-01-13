@@ -376,10 +376,21 @@ class SpeechPipelineManager:
 
         Sets the `quick_answer_first_chunk_ready` flag on the current `running_generation`
         if one exists. This flag might be used for fine-grained timing or state checks.
+        Also records the timestamp for TTFA (Time To First Audio) calculation.
         """
+        import time
+        first_audio_time = time.time()
         logger.info("🗣️🎶 First audio chunk synthesized. Setting TTS quick allowed event.")
         if self.running_generation:
             self.running_generation.quick_answer_first_chunk_ready = True
+            self.running_generation.first_audio_timestamp = first_audio_time
+            
+            # Call external callback if set (for logging TTFA)
+            if hasattr(self, 'on_first_audio_callback') and self.on_first_audio_callback:
+                try:
+                    self.on_first_audio_callback(first_audio_time)
+                except Exception as e:
+                    logger.warning(f"🗣️⚠️ Error in on_first_audio_callback: {e}")
 
     def preprocess_chunk(self, chunk: str) -> str:
         """

@@ -32,15 +32,24 @@ from fastapi.staticfiles import StaticFiles
 from starlette.responses import HTMLResponse, Response, FileResponse
 from urllib.parse import parse_qs
 
-USE_SSL = False
-DEFAULT_ENGINE = os.getenv("DEFAULT_TTS_ENGINE", "kokoro")
+# Load centralized config
+from server_config_loader import load_server_config, get_server_config
+from conversation_logger import init_conversation_logger, get_conversation_logger
+
+# Load config at module level
+_server_config = load_server_config()
+
+# Apply config values (with env var overrides for backwards compatibility)
+USE_SSL = _server_config.server.use_ssl
+DEFAULT_ENGINE = os.getenv("DEFAULT_TTS_ENGINE", _server_config.defaults.tts_engine)
 DEFAULT_ORPHEUS_MODEL = os.getenv(
     "DEFAULT_ORPHEUS_MODEL",
-    "orpheus-3b-0.1-ft-Q8_0-GGUF/orpheus-3b-0.1-ft-q8_0.gguf",
+    _server_config.defaults.orpheus_model,
 )
-DEFAULT_LLM_PROVIDER = os.getenv("DEFAULT_LLM_PROVIDER", "ollama")
-DEFAULT_LLM_MODEL = os.getenv("DEFAULT_LLM_MODEL", "llama3")
-DEFAULT_NO_THINK = os.getenv("DEFAULT_NO_THINK", "false").lower() == "true"
+DEFAULT_LLM_PROVIDER = os.getenv("DEFAULT_LLM_PROVIDER", _server_config.defaults.llm_provider)
+DEFAULT_LLM_MODEL = os.getenv("DEFAULT_LLM_MODEL", _server_config.defaults.llm_model)
+DEFAULT_NO_THINK = os.getenv("DEFAULT_NO_THINK", str(_server_config.defaults.no_think)).lower() == "true"
+LANGUAGE = _server_config.defaults.language
 
 DIRECT_STREAM = DEFAULT_ENGINE == "orpheus"
 
@@ -187,10 +196,84 @@ async def lifespan(app: FastAPI):
         app: The FastAPI application instance.
     """
     logger.info("🖥️▶️ Server starting up")
+    
+    # Initialize conversation logger
+    config = get_server_config()
+    conv_logger = init_conversation_logger(config.logging.__dict__)
+    app.state.ConversationLogger = conv_logger
+    logger.info(f"📝 Conversation logging: {'ENABLED' if conv_logger.enabled else 'DISABLED'}")
+    
     # Initialize global components, not connection-specific state
     app.state.CharacterSessions: Dict[str, CharacterSession] = {}
     app.state.CharacterConfig = load_character_config()
     app.state.Aborting = False # Keep this? Its usage isn't clear in the provided snippet. Minimizing changes.
+    
+    # Pre-initialize pipelines if configured
+    pre_init_mode = config.initialization.pre_init_mode
+    if config.initialization.pre_init_pipelines and pre_init_mode != "none":
+        if pre_init_mode == "all":
+            # Load all characters from character_config.json
+            pre_init_ids = list(app.state.CharacterConfig.keys())
+            logger.info(f"🚀 Pre-init mode: ALL - will load all {len(pre_init_ids)} characters")
+        elif pre_init_mode == "specific":
+            # Only load specified character IDs
+            pre_init_ids = config.initialization.pre_init_character_ids
+            logger.info(f"🚀 Pre-init mode: SPECIFIC - will load {len(pre_init_ids)} characters")
+        else:
+            pre_init_ids = []
+            logger.warning(f"🚀⚠️ Unknown pre_init_mode '{pre_init_mode}', skipping pre-initialization")
+        
+        if pre_init_ids:
+            logger.info(f"🚀 Pre-initializing pipelines for: {pre_init_ids}")
+            for char_id in pre_init_ids:
+                char_config = app.state.CharacterConfig.get(char_id, {})
+                if not char_config:
+                    logger.warning(f"🚀⚠️ Character {char_id} not found in config, skipping")
+                    continue
+                    
+                logger.info(f"🚀 Pre-initializing {char_id}...")
+                try:
+                    # Create session with pipeline
+                    session = CharacterSession(character_id=char_id, config=char_config)
+                    
+                    # Extract prompt layers
+                    personality = char_config.get("personality")
+                    game_knowledge = char_config.get("game_knowledge")
+                    system_prompt = char_config.get("system_prompt") if not personality and not game_knowledge else None
+                    
+                    # Create pipeline (this loads TTS/LLM models)
+                    session.pipeline = SpeechPipelineManager(
+                        tts_engine=char_config.get("tts_engine", DEFAULT_ENGINE),
+                        llm_provider=char_config.get("llm_provider", DEFAULT_LLM_PROVIDER),
+                        llm_model=char_config.get("llm_model", DEFAULT_LLM_MODEL),
+                        no_think=char_config.get("no_think", DEFAULT_NO_THINK),
+                        orpheus_model=char_config.get("orpheus_model", DEFAULT_ORPHEUS_MODEL),
+                        personality=personality,
+                        game_knowledge=game_knowledge,
+                        system_prompt_override=system_prompt,
+                        history=char_config.get("history", []),
+                        voice=char_config.get("voice"),
+                        reference_audio=char_config.get("reference_audio"),
+                        session_id=char_id,
+                    )
+                    
+                    # Also pre-initialize AudioInputProcessor (loads Whisper, VAD, turn detection)
+                    logger.info(f"🚀 Pre-initializing AudioInputProcessor for {char_id}...")
+                    session.audio_input = AudioInputProcessor(
+                        LANGUAGE,
+                        is_orpheus=(char_config.get("tts_engine", DEFAULT_ENGINE) == "orpheus"),
+                        pipeline_latency=0.5,
+                    )
+                    
+                    app.state.CharacterSessions[char_id] = session
+                    logger.info(f"🚀✅ Pre-initialized {char_id} (pipeline + audio)")
+                except Exception as e:
+                    logger.error(f"🚀💥 Failed to pre-initialize {char_id}: {e}")
+            
+            logger.info(f"🚀 Pre-initialization complete. {len(app.state.CharacterSessions)} characters ready.")
+            # Log what's actually in CharacterSessions
+            for cid, sess in app.state.CharacterSessions.items():
+                logger.info(f"🚀📋 CharacterSessions['{cid}']: pipeline={'✅' if sess.pipeline else '❌'}, audio_input={'✅' if sess.audio_input else '❌'}")
     
     # Initialize Game Manager - Step by step to find the bug
     app.state.GameManagerClients: List[WebSocket] = []
@@ -228,6 +311,11 @@ async def lifespan(app: FastAPI):
                         "source": "GameManager"
                     }))
                 logger.info(f"🎮💉 Game Manager injected into {target}")
+                
+                # Log injection
+                conv_logger = get_conversation_logger()
+                if conv_logger:
+                    conv_logger.log_injection(target, instruction, source="game_manager")
             else:
                 logger.warning(f"🎮⚠️ Cannot inject into {target}: session not found or no pipeline")
         
@@ -384,6 +472,10 @@ async def lifespan(app: FastAPI):
     yield
 
     logger.info("🖥️⏹️ Server shutting down")
+    
+    # Close conversation logger (ensures all logs are flushed)
+    if hasattr(app.state, 'ConversationLogger') and app.state.ConversationLogger:
+        app.state.ConversationLogger.close()
     
     # Stop Game Manager (if enabled)
     # if app.state.GameManager:
@@ -730,6 +822,11 @@ async def process_incoming_data(ws: WebSocket, session: CharacterSession) -> Non
                                 "character_id": session.character_id
                             })
                         logger.info(f"🖥️💉 Injected into {session.character_id}: {content}")
+                        
+                        # Log direct injection
+                        conv_logger = get_conversation_logger()
+                        if conv_logger:
+                            conv_logger.log_injection(session.character_id, content, source="direct")
                     else:
                         logger.warning(f"🖥️⚠️ Inject failed: empty content or no pipeline")
 
@@ -995,6 +1092,11 @@ class TranscriptionCallbacks:
         self.last_inferred_transcription: str = ""
         self.final_assistant_answer_sent: bool = False
         self.partial_transcription: str = "" # Added for clarity
+        
+        # Timing tracking for logging
+        self.recording_start_time: float = 0.0
+        self.llm_start_time: float = 0.0
+        self.ttfa_ms: float = 0.0  # Time To First Audio
 
         self.reset_state() # Call reset to ensure consistency
 
@@ -1082,6 +1184,9 @@ class TranscriptionCallbacks:
         Args:
             txt: The potential sentence text.
         """
+        # Track LLM start time for logging
+        self.llm_start_time = time.time()
+        
         logger.debug(f"🖥️🧠 Potential sentence: '{txt}'")
         # Access global manager state
         if self.session.pipeline:
@@ -1155,6 +1260,19 @@ class TranscriptionCallbacks:
         # Access global manager state
         if self.session.pipeline:
             self.session.pipeline.history.append({"role": "user", "content": user_request_content})
+        
+        # Log player utterance with timing
+        conv_logger = get_conversation_logger()
+        if conv_logger:
+            transcription_time_ms = None
+            if self.recording_start_time > 0:
+                transcription_time_ms = (time.time() - self.recording_start_time) * 1000
+            conv_logger.log_player_utterance(
+                character_id=self.session.character_id,
+                text=user_request_content,
+                is_partial=False,
+                transcription_time_ms=transcription_time_ms
+            )
 
     def on_final(self, txt: str):
         """
@@ -1216,6 +1334,28 @@ class TranscriptionCallbacks:
                     "content": txt
                 })
 
+    def on_first_audio_chunk(self, first_audio_timestamp: float):
+        """
+        Callback invoked when the first TTS audio chunk is synthesized.
+        
+        Logs the Time To First Audio (TTFA) - crucial for latency perception.
+        
+        Args:
+            first_audio_timestamp: The time.time() when first audio was ready.
+        """
+        if self.llm_start_time > 0:
+            self.ttfa_ms = (first_audio_timestamp - self.llm_start_time) * 1000
+            logger.info(f"🖥️🎵 TTFA (Time To First Audio): {self.ttfa_ms:.1f}ms")
+            
+            # Log TTFA event
+            conv_logger = get_conversation_logger()
+            if conv_logger:
+                conv_logger.log_event(
+                    event_type="ttfa",
+                    character_id=self.session.character_id,
+                    ttfa_ms=self.ttfa_ms
+                )
+
     def on_recording_start(self):
         """
         Callback invoked when the audio input processor starts recording user speech.
@@ -1226,6 +1366,9 @@ class TranscriptionCallbacks:
         
         Also stops any ongoing NPC-to-NPC conversations since the player is now speaking.
         """
+        # Track recording start time for logging
+        self.recording_start_time = time.time()
+        
         logger.info(f"{Colors.ORANGE}🖥️🎙️ Recording started.{Colors.RESET} TTS Client Playing: {self.tts_client_playing}")
         
         # Stop NPC conversation if one is running - player is now speaking
@@ -1321,6 +1464,22 @@ class TranscriptionCallbacks:
                             pass
                 self.final_assistant_answer_sent = True
                 self.final_assistant_answer = cleaned_answer # Store the sent answer
+                
+                # Log NPC response with timing
+                conv_logger = get_conversation_logger()
+                if conv_logger:
+                    total_time_ms = None
+                    if self.llm_start_time > 0:
+                        total_time_ms = (time.time() - self.llm_start_time) * 1000
+                    conv_logger.log_npc_response(
+                        character_id=self.session.character_id,
+                        text=cleaned_answer,
+                        was_interrupted=self.user_interrupted,
+                        ttfa_ms=self.ttfa_ms if self.ttfa_ms > 0 else None,
+                        total_time_ms=total_time_ms
+                    )
+                    # Reset TTFA for next response
+                    self.ttfa_ms = 0.0
             else:
                 logger.warning(f"🖥️⚠️ {Colors.YELLOW}Final assistant answer was empty after cleaning.{Colors.RESET}")
                 self.final_assistant_answer_sent = False # Don't mark as sent
@@ -1368,6 +1527,14 @@ async def websocket_endpoint(ws: WebSocket):
         return
 
     existing_session = app.state.CharacterSessions.get(character_id)
+    
+    # Debug: Log pre-init status
+    logger.info(f"🔍 Looking for character_id='{character_id}' in CharacterSessions (keys: {list(app.state.CharacterSessions.keys())})")
+    if existing_session:
+        logger.info(f"🔍 Found existing session for '{character_id}': pipeline={'YES' if existing_session.pipeline else 'NO'}, message_queue={'YES' if existing_session.message_queue else 'NO'}")
+    else:
+        logger.info(f"🔍 No existing session for '{character_id}' - will create new one")
+    
     if existing_session and existing_session.message_queue is not None:
         logger.warning(f"🖥️⚠️ Character {character_id} already has an active connection; dropping new attempt")
         await ws.close(code=4409)
@@ -1376,15 +1543,23 @@ async def websocket_endpoint(ws: WebSocket):
     config = app.state.CharacterConfig.get(character_id, {})
     session = existing_session or CharacterSession(character_id=character_id, config=config)
     app.state.CharacterSessions[character_id] = session
-
+    
+    
     if session.audio_input is None:
+        logger.info(f"🔧 Creating new AudioInputProcessor for {character_id} (NOT pre-initialized)...")
+        audio_start = time.time()
         session.audio_input = AudioInputProcessor(
             LANGUAGE,
             is_orpheus=(session.config.get("tts_engine", DEFAULT_ENGINE) == "orpheus"),
             pipeline_latency=0.5,
         )
+        logger.info(f"🔧 AudioInputProcessor created in {time.time() - audio_start:.2f}s")
+    else:
+        logger.info(f"🚀✅ Using PRE-INITIALIZED AudioInputProcessor for {character_id}")
 
     if session.pipeline is None:
+        logger.info(f"🔧 Creating new SpeechPipelineManager for {character_id} (NOT pre-initialized)...")
+        pipeline_start = time.time()
         # 3-Layer Prompt System: personality (Layer 2) + game_knowledge (Layer 3)
         # Layer 1 (Framework) is built-in to prompt_layers.py
         personality = session.config.get("personality")
@@ -1407,6 +1582,9 @@ async def websocket_endpoint(ws: WebSocket):
             reference_audio=session.config.get("reference_audio"),
             session_id=character_id,
         )
+        logger.info(f"🔧 SpeechPipelineManager created in {time.time() - pipeline_start:.2f}s")
+    else:
+        logger.info(f"🚀✅ Using PRE-INITIALIZED pipeline for {character_id} (skipped {10}-20s load time)")
     
     # Set up message queue
     message_queue = session.message_queue or asyncio.Queue()
@@ -1436,6 +1614,7 @@ async def websocket_endpoint(ws: WebSocket):
     session.audio_input.silence_active_callback = callbacks.on_silence_active
 
     session.pipeline.on_partial_assistant_text = callbacks.on_partial_assistant_text
+    session.pipeline.on_first_audio_callback = callbacks.on_first_audio_chunk
 
     tasks = [
         asyncio.create_task(process_incoming_data(ws, session)),
@@ -1451,6 +1630,11 @@ async def websocket_endpoint(ws: WebSocket):
         "type": "character_ready",
         "character_id": character_id
     })
+    
+    # Log character connection
+    conv_logger = get_conversation_logger()
+    if conv_logger:
+        conv_logger.log_character_connect(character_id)
     
     # Notify NPC conversation clients about updated character list
     if hasattr(app.state, 'broadcast_npc_character_update'):
@@ -1475,6 +1659,11 @@ async def websocket_endpoint(ws: WebSocket):
         # Use return_exceptions=True to prevent gather from stopping on first error during cleanup
         await asyncio.gather(*tasks, return_exceptions=True)
         logger.info("🖥️❌ WebSocket session ended.")
+        
+        # Log character disconnection
+        conv_logger = get_conversation_logger()
+        if conv_logger:
+            conv_logger.log_character_disconnect(character_id)
 
         session.stop_connection()
         if session.config.get("persist_history", False) and session.pipeline:
@@ -1486,11 +1675,17 @@ async def websocket_endpoint(ws: WebSocket):
 # Entry point
 # --------------------------------------------------------------------
 if __name__ == "__main__":
+    # Get server config for host/port
+    _startup_config = get_server_config()
+    host = _startup_config.server.host
+    port = _startup_config.server.port
 
     # Run the server without SSL
     if not USE_SSL:
-        logger.info("🖥️▶️ Starting server without SSL.")
-        uvicorn.run("server:app", host="0.0.0.0", port=8000, log_config=None)
+        logger.info(f"🖥️▶️ Starting server without SSL on {host}:{port}")
+        # Pass app object directly (not string) to avoid double-import issues
+        # This ensures pre-initialized state persists
+        uvicorn.run(app, host=host, port=port, log_config=None)
 
     else:
         logger.info("🖥️🔒 Attempting to start server with SSL.")
@@ -1507,11 +1702,12 @@ if __name__ == "__main__":
              sys.exit(1)
 
         # Run the server with SSL
-        logger.info(f"🖥️▶️ Starting server with SSL (cert: {cert_file}, key: {key_file}).")
+        logger.info(f"🖥️▶️ Starting server with SSL on {host}:{port} (cert: {cert_file}, key: {key_file}).")
+        # Pass app object directly (not string) to avoid double-import issues
         uvicorn.run(
-            "server:app",
-            host="0.0.0.0",
-            port=8000,
+            app,
+            host=host,
+            port=port,
             log_config=None,
             ssl_certfile=cert_file,
             ssl_keyfile=key_file,
