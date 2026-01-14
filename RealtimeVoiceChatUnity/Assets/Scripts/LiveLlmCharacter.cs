@@ -311,10 +311,47 @@ public class LiveLlmCharacterBase : MonoBehaviour
     /// <summary>
     /// Play TTS audio from external source (e.g., NPC conversations).
     /// Called by NpcConversationController to route audio to this character.
+    /// NPC audio is 24kHz, so we upsample to 48kHz to match the streaming buffer.
     /// </summary>
     public void PlayExternalTtsChunk(string base64Content)
     {
-        PlayTtsChunk(base64Content);
+        if (string.IsNullOrEmpty(base64Content) || !ttsSource) return;
+
+        byte[] pcmBytes;
+        try
+        {
+            pcmBytes = Convert.FromBase64String(base64Content);
+        }
+        catch (Exception ex)
+        {
+            Debug.LogError($"[{characterId}] Invalid base64 chunk: {ex.Message}");
+            return;
+        }
+
+        int sampleCount = pcmBytes.Length / 2;
+        if (sampleCount == 0) return;
+
+        // Decode 24kHz samples
+        float[] samples24k = new float[sampleCount];
+        for (int i = 0; i < sampleCount; i++)
+        {
+            short s = BitConverter.ToInt16(pcmBytes, i * 2);
+            samples24k[i] = Mathf.Clamp(s / 32768f, -1f, 1f);
+        }
+
+        // Upsample from 24kHz to 48kHz (2x) using linear interpolation
+        float[] samples48k = new float[sampleCount * 2];
+        for (int i = 0; i < sampleCount - 1; i++)
+        {
+            samples48k[i * 2] = samples24k[i];
+            samples48k[i * 2 + 1] = (samples24k[i] + samples24k[i + 1]) * 0.5f;
+        }
+        // Handle last sample
+        samples48k[(sampleCount - 1) * 2] = samples24k[sampleCount - 1];
+        samples48k[(sampleCount - 1) * 2 + 1] = samples24k[sampleCount - 1];
+
+        EnqueueTtsSamples(samples48k);
+        MarkTtsPlaying(samples48k.Length / (float)SampleRate);
     }
 
     private void PlayTtsChunk(string base64Content)
@@ -442,6 +479,51 @@ public class LiveLlmCharacterBase : MonoBehaviour
                 SendJsonMessage("tts_stop");
             }
         }
+    }
+
+    /// <summary>
+    /// Public method to immediately stop all audio playback.
+    /// Called by NpcConversationController when player interrupts.
+    /// </summary>
+    public void StopAllAudioImmediately()
+    {
+        Debug.Log($"[{characterId}] ⚡ StopAllAudioImmediately - clearing buffer NOW");
+        
+        // Stop any coroutines
+        if (ttsStopCoroutine != null)
+        {
+            StopCoroutine(ttsStopCoroutine);
+            ttsStopCoroutine = null;
+        }
+
+        // CRITICAL: Clear the streaming buffer completely
+        // This is the main action that stops audio - the streaming clip reads from this buffer
+        // Once cleared, it outputs silence
+        lock (ttsBufferLock)
+        {
+            int hadSamples = ttsBufferedSamples;
+            ttsBufferedSamples = 0;
+            ttsReadIndex = 0;
+            ttsWriteIndex = 0;
+            Array.Clear(ttsBuffer, 0, ttsBuffer.Length);
+            Debug.Log($"[{characterId}] Cleared {hadSamples} buffered samples");
+        }
+
+        // Also stop and restart the AudioSource to flush any Unity internal buffers
+        if (ttsSource != null)
+        {
+            ttsSource.Stop();
+            
+            // Ensure we have the streaming clip
+            if (ttsStreamClip != null)
+            {
+                ttsSource.clip = ttsStreamClip;
+                ttsSource.Play();
+            }
+        }
+
+        isTtsPlayingClient = false;
+        Debug.Log($"[{characterId}] ✅ Audio stopped immediately");
     }
 
     private async void SendJsonMessage(string type, string content = "")

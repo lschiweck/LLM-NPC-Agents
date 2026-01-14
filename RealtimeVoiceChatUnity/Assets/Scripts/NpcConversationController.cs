@@ -35,6 +35,7 @@ public class NpcConversationController : MonoBehaviour
     public UnityEvent<string> OnConversationStateChanged; // state
     public UnityEvent OnConversationStarted;
     public UnityEvent OnConversationEnded;
+    public UnityEvent OnConversationInterrupted; // Player started speaking
 
     private WebSocket ws;
     private bool isConversationRunning;
@@ -44,6 +45,14 @@ public class NpcConversationController : MonoBehaviour
     private System.Collections.Generic.Queue<(string speakerId, string base64Audio)> audioQueue = new();
     private bool isPlayingAudio = false;
     private Coroutine audioPlaybackCoroutine;
+    
+    // Interruption handling
+    private bool isInterrupted = false;
+    private string currentPlayingSpeakerId = null;
+    private AudioSource currentPlayingAudioSource = null; // Direct reference for reliable stopping
+
+    // Dedicated AudioSources for NPC-to-NPC playback (do NOT reuse LiveLlmCharacterBase.ttsSource streaming)
+    private readonly System.Collections.Generic.Dictionary<string, AudioSource> npcConvSources = new();
 
     [Serializable]
     private class ServerMessage
@@ -193,6 +202,10 @@ public class NpcConversationController : MonoBehaviour
                 // Server sends list of available characters - can be used for UI
                 Debug.Log($"[NpcConversation] Available characters received.");
                 break;
+            
+            case "npc_conversation_interrupted":
+                HandleInterruption();
+                break;
 
             default:
                 Debug.Log($"[NpcConversation] Unhandled message type: {msg.type}");
@@ -234,48 +247,72 @@ public class NpcConversationController : MonoBehaviour
     {
         const int NPC_SAMPLE_RATE = 24000; // TTS outputs at 24kHz
         
-        while (audioQueue.Count > 0 || isPlayingAudio)
+        while ((audioQueue.Count > 0 || isPlayingAudio) && !isInterrupted)
         {
-            if (audioQueue.Count > 0 && !isPlayingAudio)
+            if (audioQueue.Count > 0 && !isPlayingAudio && !isInterrupted)
             {
                 var (speakerId, base64Audio) = audioQueue.Dequeue();
                 
                 var character = LiveLlmCharacterBase.GetCharacter(speakerId);
-                if (character != null && character.ttsSource != null)
+                if (character != null)
                 {
-                    Debug.Log($"[NpcConversation] Playing audio for {speakerId}");
+                    Debug.Log($"[NpcConversation] Playing audio for {speakerId} via dedicated NPC-conv AudioSource");
                     isPlayingAudio = true;
-                    
-                    // Decode audio bytes
+                    currentPlayingSpeakerId = speakerId;
+                    currentPlayingAudioSource = GetOrCreateNpcConvSource(speakerId, character);
+
+                    // Decode PCM16 (little endian) -> float samples
                     byte[] audioBytes = Convert.FromBase64String(base64Audio);
-                    int sampleCount = audioBytes.Length / 2; // 16-bit = 2 bytes per sample
-                    
-                    // Convert to float samples
+                    int sampleCount = audioBytes.Length / 2;
+                    if (sampleCount <= 0)
+                    {
+                        Debug.LogWarning($"[NpcConversation] Empty audio for {speakerId}");
+                        isPlayingAudio = false;
+                        currentPlayingSpeakerId = null;
+                        currentPlayingAudioSource = null;
+                        continue;
+                    }
+
                     float[] samples = new float[sampleCount];
                     for (int i = 0; i < sampleCount; i++)
                     {
                         short s = BitConverter.ToInt16(audioBytes, i * 2);
                         samples[i] = s / 32768f;
                     }
-                    
-                    // Create AudioClip at 24kHz (native TTS rate)
-                    AudioClip clip = AudioClip.Create($"NpcConv_{speakerId}", sampleCount, 1, NPC_SAMPLE_RATE, false);
+
+                    // Create clip at 24kHz and play via Play() so Stop() works instantly.
+                    var clip = AudioClip.Create($"NpcConv_{speakerId}_{Time.frameCount}", sampleCount, 1, NPC_SAMPLE_RATE, false);
                     clip.SetData(samples, 0);
+
+                    currentPlayingAudioSource.Stop();
+                    currentPlayingAudioSource.clip = clip;
+                    currentPlayingAudioSource.Play();
+
+                    // Wait for completion by checking AudioSource.isPlaying (no "duration guessing")
+                    while (currentPlayingAudioSource != null && currentPlayingAudioSource.isPlaying && !isInterrupted)
+                    {
+                        yield return new WaitForSeconds(0.02f);
+                    }
+
+                    // Cleanup clip reference (do not destroy immediately if Unity is still using it)
+                    if (currentPlayingAudioSource != null)
+                    {
+                        currentPlayingAudioSource.clip = null;
+                    }
+                    Destroy(clip);
                     
-                    // Play through character's AudioSource (preserves 3D spatial audio)
-                    character.ttsSource.PlayOneShot(clip);
-                    
-                    float durationSeconds = (float)sampleCount / NPC_SAMPLE_RATE;
-                    Debug.Log($"[NpcConversation] Audio duration: {durationSeconds:F2}s for {speakerId}");
-                    
-                    // Wait for audio to finish (plus small buffer)
-                    yield return new WaitForSeconds(durationSeconds + 0.2f);
+                    if (isInterrupted)
+                    {
+                        Debug.Log($"[NpcConversation] Playback interrupted for {speakerId}");
+                    }
                     
                     isPlayingAudio = false;
+                    currentPlayingSpeakerId = null;
+                    currentPlayingAudioSource = null;
                 }
                 else
                 {
-                    Debug.LogWarning($"[NpcConversation] Character '{speakerId}' not found or no AudioSource. Available: {string.Join(", ", LiveLlmCharacterBase.AllCharacters.Keys)}");
+                    Debug.LogWarning($"[NpcConversation] Character '{speakerId}' not found. Available: {string.Join(", ", LiveLlmCharacterBase.AllCharacters.Keys)}");
                 }
             }
             else
@@ -284,7 +321,15 @@ public class NpcConversationController : MonoBehaviour
             }
         }
         
+        // Clear any remaining audio if interrupted
+        if (isInterrupted)
+        {
+            audioQueue.Clear();
+            Debug.Log("[NpcConversation] Cleared remaining audio queue due to interruption.");
+        }
+        
         audioPlaybackCoroutine = null;
+        currentPlayingSpeakerId = null;
         Debug.Log("[NpcConversation] Audio queue empty, playback coroutine finished.");
     }
 
@@ -297,9 +342,10 @@ public class NpcConversationController : MonoBehaviour
         if (msg.state == "running")
         {
             isConversationRunning = true;
+            isInterrupted = false;  // Reset on new conversation
             OnConversationStarted?.Invoke();
         }
-        else if (msg.state == "finished" || msg.state == "stopped" || msg.state == "error")
+        else if (msg.state == "finished" || msg.state == "stopped" || msg.state == "stopping" || msg.state == "error")
         {
             isConversationRunning = false;
             OnConversationEnded?.Invoke();
@@ -310,6 +356,86 @@ public class NpcConversationController : MonoBehaviour
     {
         Debug.Log($"[NpcConversation] Turn {msg.turn_number} - {msg.speaker_id}: {msg.message}");
         OnConversationTurn?.Invoke(msg.speaker_id, msg.message);
+    }
+
+    /// <summary>
+    /// Handle interruption message from server - player is speaking, stop NPC audio immediately.
+    /// </summary>
+    private void HandleInterruption()
+    {
+        Debug.Log("[NpcConversation] 🛑 INTERRUPT RECEIVED - stopping ALL NPC audio NOW");
+        isInterrupted = true;
+        
+        // Stop the playback coroutine first
+        if (audioPlaybackCoroutine != null)
+        {
+            StopCoroutine(audioPlaybackCoroutine);
+            audioPlaybackCoroutine = null;
+            Debug.Log("[NpcConversation] Stopped audio playback coroutine");
+        }
+        
+        // Clear the audio queue immediately
+        audioQueue.Clear();
+        Debug.Log("[NpcConversation] Cleared audio queue");
+
+        // Stop any currently playing NPC-conversation audio immediately (dedicated sources only)
+        if (currentPlayingAudioSource != null)
+        {
+            currentPlayingAudioSource.Stop();
+            currentPlayingAudioSource.clip = null;
+        }
+        foreach (var kvp in npcConvSources)
+        {
+            if (kvp.Value != null)
+            {
+                kvp.Value.Stop();
+                kvp.Value.clip = null;
+            }
+        }
+        
+        currentPlayingSpeakerId = null;
+        currentPlayingAudioSource = null;
+        isPlayingAudio = false;
+        isConversationRunning = false;
+        OnConversationInterrupted?.Invoke();
+        OnConversationEnded?.Invoke();
+        
+        Debug.Log("[NpcConversation] ✅ Interruption complete - all audio stopped");
+    }
+
+    private AudioSource GetOrCreateNpcConvSource(string speakerId, LiveLlmCharacterBase character)
+    {
+        if (npcConvSources.TryGetValue(speakerId, out var existing) && existing != null)
+        {
+            return existing;
+        }
+
+        // Create a separate AudioSource so we never touch the streaming ttsSource used for player↔NPC.
+        var src = character.gameObject.AddComponent<AudioSource>();
+        src.playOnAwake = false;
+        src.loop = false;
+
+        // Match spatial settings from the character’s main TTS source (if present)
+        if (character.ttsSource != null)
+        {
+            src.spatialBlend = character.ttsSource.spatialBlend;
+            src.rolloffMode = character.ttsSource.rolloffMode;
+            src.minDistance = character.ttsSource.minDistance;
+            src.maxDistance = character.ttsSource.maxDistance;
+            src.dopplerLevel = character.ttsSource.dopplerLevel;
+            src.volume = character.ttsSource.volume;
+        }
+        else
+        {
+            src.spatialBlend = 1f;
+            src.rolloffMode = AudioRolloffMode.Logarithmic;
+            src.minDistance = 1.5f;
+            src.maxDistance = 15f;
+            src.dopplerLevel = 0f;
+        }
+
+        npcConvSources[speakerId] = src;
+        return src;
     }
 
     /// <summary>
@@ -332,6 +458,9 @@ public class NpcConversationController : MonoBehaviour
             Debug.LogWarning("[NpcConversation] Conversation already running.");
             return;
         }
+        
+        // Reset interruption flag when starting a new conversation
+        isInterrupted = false;
 
         var msg = new StartConversationMessage
         {

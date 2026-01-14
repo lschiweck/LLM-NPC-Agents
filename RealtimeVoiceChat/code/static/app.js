@@ -946,6 +946,7 @@ let npcConvAvailableCharacters = [];
 let npcConvAudioContext = null;
 let npcConvAudioQueue = [];
 let npcConvIsPlaying = false;
+let npcConvCurrentSource = null; // Track current playing audio source for interruption
 
 function initNpcConversation() {
   const wsProto = window.location.protocol === "https:" ? "wss:" : "ws:";
@@ -982,6 +983,8 @@ function initNpcConversation() {
           handleNpcConvAvailableCharacters(data);
         } else if (data.type === "npc_conversation_turn") {
           handleNpcConvTurn(data);
+        } else if (data.type === "npc_conversation_interrupted") {
+          handleNpcConvInterrupted(data);
         } else if (data.type === "error") {
           console.error("[NPC Conv] Error:", data.message);
           alert("NPC Conversation Error: " + data.message);
@@ -1067,6 +1070,32 @@ function handleNpcConvTurn(data) {
   console.log(`[NPC Conv] Turn ${turn.turn_number}: ${turn.speaker_id} says: ${turn.message.substring(0, 50)}...`);
 }
 
+function handleNpcConvInterrupted(data) {
+  console.log(`[NPC Conv] 🛑 Conversation interrupted: ${data.reason || 'player speaking'}`);
+  
+  // Clear the audio queue immediately
+  npcConvAudioQueue = [];
+  
+  // Stop any currently playing audio
+  if (npcConvCurrentSource) {
+    try {
+      npcConvCurrentSource.stop();
+      console.log("[NPC Conv] Stopped current audio playback");
+    } catch (e) {
+      // Source might already be stopped
+    }
+    npcConvCurrentSource = null;
+  }
+  
+  npcConvIsPlaying = false;
+  
+  // Update state
+  npcConvState.state = "stopping";
+  updateNpcConvStatus("idle");
+  
+  console.log("[NPC Conv] Audio playback interrupted, queue cleared");
+}
+
 function handleNpcConvAudio(arrayBuffer) {
   // First 32 bytes are speaker ID (null-padded)
   const headerBytes = new Uint8Array(arrayBuffer, 0, 32);
@@ -1130,8 +1159,12 @@ async function playNextNpcConvAudio() {
     source.buffer = audioBuffer;
     source.connect(npcConvAudioContext.destination);
     
+    // Track current source for interruption
+    npcConvCurrentSource = source;
+    
     source.onended = () => {
       console.log(`[NPC Conv] Finished playing audio for ${speakerId}`);
+      npcConvCurrentSource = null;
       npcConvIsPlaying = false;
       playNextNpcConvAudio();
     };
@@ -1159,6 +1192,9 @@ function updateNpcConvStatus(status) {
   } else if (status === "finished") {
     npcConvStatus.textContent = "● Finished";
     npcConvStatus.className = "npc-conv-status finished";
+  } else if (status === "stopping" || status === "interrupted") {
+    npcConvStatus.textContent = "● Interrupted";
+    npcConvStatus.className = "npc-conv-status idle";
   } else if (status === "disconnected") {
     npcConvStatus.textContent = "● Disconnected";
     npcConvStatus.className = "npc-conv-status idle";

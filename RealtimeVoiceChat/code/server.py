@@ -196,6 +196,32 @@ async def lifespan(app: FastAPI):
         app: The FastAPI application instance.
     """
     logger.info("🖥️▶️ Server starting up")
+
+    # Store the main asyncio loop so background threads (audio processing) can safely schedule work.
+    # Many callbacks (e.g. on_recording_start) are triggered from asyncio.to_thread(...) and thus
+    # do NOT have a running event loop.
+    app.state.main_loop = asyncio.get_running_loop()
+
+    def _schedule_on_main_loop(coro):
+        """
+        Schedule an async coroutine to run on the FastAPI main event loop, from any thread.
+        """
+        loop = getattr(app.state, "main_loop", None)
+        if loop is None:
+            return
+        try:
+            running = asyncio.get_running_loop()
+            if running is loop:
+                asyncio.create_task(coro)
+                return
+        except RuntimeError:
+            # Not in an event loop (likely a background thread)
+            pass
+        try:
+            asyncio.run_coroutine_threadsafe(coro, loop)
+        except Exception:
+            # Loop may be closing during shutdown; ignore.
+            pass
     
     # Initialize conversation logger
     config = get_server_config()
@@ -339,11 +365,7 @@ async def lifespan(app: FastAPI):
         
         # Use a sync wrapper that creates a task for the async broadcast
         def sync_broadcast_wrapper(state: Dict):
-            try:
-                asyncio.create_task(broadcast_gm_state(state))
-            except RuntimeError:
-                # No event loop running yet - ignore
-                pass
+            _schedule_on_main_loop(broadcast_gm_state(state))
         
         app.state.GameManager.on_state_update = sync_broadcast_wrapper
         logger.info("🎮 Step 2: Callbacks set OK")
@@ -383,10 +405,7 @@ async def lifespan(app: FastAPI):
                 clients.remove(client_ws)
     
     def on_npc_state_update(state):
-        try:
-            asyncio.create_task(broadcast_npc_conv_state(state))
-        except RuntimeError:
-            pass
+        _schedule_on_main_loop(broadcast_npc_conv_state(state))
     
     async def broadcast_npc_turn(turn: ConversationTurn, audio_bytes: bytes):
         clients = app.state.NPCConversationClients
@@ -429,15 +448,44 @@ async def lifespan(app: FastAPI):
                 clients.remove(client_ws)
     
     def on_npc_turn_complete(turn: ConversationTurn, audio_bytes: bytes):
-        try:
-            asyncio.create_task(broadcast_npc_turn(turn, audio_bytes))
-        except RuntimeError:
-            pass
+        _schedule_on_main_loop(broadcast_npc_turn(turn, audio_bytes))
+    
+    async def broadcast_npc_conversation_interrupted(reason: str = "player_speaking"):
+        """Broadcast interruption message to all NPC conversation clients - tells them to stop playback."""
+        clients = app.state.NPCConversationClients
+        if not clients:
+            return
+        
+        logger.info(f"🎭🛑 Broadcasting conversation interrupted to {len(clients)} clients (reason={reason})")
+        
+        message = json.dumps({
+            "type": "npc_conversation_interrupted",
+            "reason": reason
+        })
+        
+        disconnected = []
+        for client_ws in clients:
+            try:
+                await client_ws.send_text(message)
+            except Exception as e:
+                logger.error(f"🎭 Failed to send interrupt message to client: {e}")
+                disconnected.append(client_ws)
+        for client_ws in disconnected:
+            if client_ws in clients:
+                clients.remove(client_ws)
+    
+    def on_npc_conversation_interrupted():
+        """Sync callback wrapper for conversation interruption."""
+        _schedule_on_main_loop(broadcast_npc_conversation_interrupted(reason="player_speaking"))
+
+    # Store for use from other callbacks (some of which run in background threads)
+    app.state.broadcast_npc_conversation_interrupted = broadcast_npc_conversation_interrupted
     
     app.state.NPCConversation = NPCConversationOrchestrator(
         get_pipeline=get_npc_pipeline,
         on_turn_complete=on_npc_turn_complete,
-        on_state_update=on_npc_state_update
+        on_state_update=on_npc_state_update,
+        on_conversation_interrupted=on_npc_conversation_interrupted
     )
     logger.info("🎭 NPC Conversation Orchestrator initialized")
     
@@ -1065,6 +1113,9 @@ class TranscriptionCallbacks:
         """
         self.session = session
         self.stop_npc_conversation = stop_npc_conversation
+        # Fallback gating: some setups won't fire on_recording_start reliably for every utterance.
+        # We'll also trigger NPC-conv interruption once per "speech segment" when we see first partial text.
+        self._npc_conv_interrupt_sent = False
         if session.message_queue is None:
             session.message_queue = asyncio.Queue()
         self.message_queue = session.message_queue
@@ -1155,6 +1206,13 @@ class TranscriptionCallbacks:
         Args:
             txt: The partial transcription text.
         """
+        # Fallback: if recording_start didn't fire (or was missed), first partial text should still interrupt NPC-to-NPC.
+        if (not self._npc_conv_interrupt_sent) and self.stop_npc_conversation and txt and txt.strip():
+            try:
+                self.stop_npc_conversation()
+                self._npc_conv_interrupt_sent = True
+            except Exception as e:
+                logger.warning(f"🖥️⚠️ Failed to stop NPC conversation (on_partial fallback): {e}")
         self.final_assistant_answer_sent = False # New user speech invalidates previous final answer sending state
         self.final_transcription = "" # Clear final transcription as this is partial
         self.partial_transcription = txt
@@ -1312,6 +1370,9 @@ class TranscriptionCallbacks:
         """
         # logger.debug(f"🖥️🎙️ Silence active: {silence_active}") # Optional: Can be noisy
         self.silence_active = silence_active
+        # Reset fallback gate once we return to silence.
+        if silence_active:
+            self._npc_conv_interrupt_sent = False
 
     def on_partial_assistant_text(self, txt: str):
         """
@@ -1375,6 +1436,7 @@ class TranscriptionCallbacks:
         if self.stop_npc_conversation:
             try:
                 self.stop_npc_conversation()
+                self._npc_conv_interrupt_sent = True
             except Exception as e:
                 logger.warning(f"🖥️⚠️ Failed to stop NPC conversation: {e}")
         # Use connection-specific tts_client_playing flag
@@ -1596,9 +1658,33 @@ async def websocket_endpoint(ws: WebSocket):
     # Create stop function for NPC conversations
     def stop_npc_conv():
         npc_conv = getattr(app.state, 'NPCConversation', None)
-        if npc_conv and hasattr(npc_conv, 'state') and npc_conv.state.state == "running":
-            logger.info("🖥️🛑 Stopping NPC conversation - player is speaking")
-            npc_conv.stop_conversation()
+        loop = getattr(app.state, "main_loop", None)
+        broadcast_interrupt = getattr(app.state, "broadcast_npc_conversation_interrupted", None)
+
+        def _do_on_loop():
+            # Always broadcast "stop playback" to NPC-conversation clients.
+            # Even if the orchestrator already stopped (or isn't in RUNNING), clients may still be playing buffered audio.
+            try:
+                if broadcast_interrupt:
+                    asyncio.create_task(broadcast_interrupt(reason="player_speaking"))
+            except Exception as e:
+                logger.warning(f"🎭⚠️ Failed to schedule npc_conversation_interrupted broadcast: {e}")
+
+            if npc_conv and hasattr(npc_conv, 'state'):
+                try:
+                    from npc_conversation import ConversationState
+                    if npc_conv.state.state == ConversationState.RUNNING:
+                        logger.info("🖥️🛑 Stopping NPC conversation - player is speaking")
+                        npc_conv.stop_conversation(reason="player_speaking")
+                except Exception as e:
+                    logger.warning(f"🖥️⚠️ Failed to stop NPC conversation (stop_npc_conv): {e}")
+
+        # This callback can run from a background thread (audio pipeline).
+        if loop is not None and loop.is_running():
+            loop.call_soon_threadsafe(_do_on_loop)
+        else:
+            # Best-effort fallback
+            _do_on_loop()
     
     callbacks = TranscriptionCallbacks(session, stop_npc_conversation=stop_npc_conv)
 

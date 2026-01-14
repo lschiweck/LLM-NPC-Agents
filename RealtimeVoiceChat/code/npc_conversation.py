@@ -98,7 +98,8 @@ class NPCConversationOrchestrator:
         get_pipeline: Callable[[str], Any],
         on_turn_complete: Optional[Callable[[ConversationTurn, bytes], None]] = None,
         on_state_update: Optional[Callable[[NPCConversationState], None]] = None,
-        on_conversation_end: Optional[Callable[[List[ConversationTurn]], None]] = None
+        on_conversation_end: Optional[Callable[[List[ConversationTurn]], None]] = None,
+        on_conversation_interrupted: Optional[Callable[[], None]] = None
     ):
         """
         Initialize the orchestrator.
@@ -108,15 +109,18 @@ class NPCConversationOrchestrator:
             on_turn_complete: Callback when a turn is complete (turn, audio_bytes)
             on_state_update: Callback when state changes
             on_conversation_end: Callback when conversation finishes
+            on_conversation_interrupted: Callback when conversation is interrupted by player
         """
         self.get_pipeline = get_pipeline
         self.on_turn_complete = on_turn_complete
         self.on_state_update = on_state_update
         self.on_conversation_end = on_conversation_end
+        self.on_conversation_interrupted = on_conversation_interrupted
         
         self.state = NPCConversationState()
         self._stop_requested = False
         self._conversation_task: Optional[asyncio.Task] = None
+        self._interrupt_event = asyncio.Event()  # For immediate interrupt signaling
         
     def _notify_state_update(self):
         """Notify listeners of state change."""
@@ -165,6 +169,7 @@ class NPCConversationOrchestrator:
             error=None
         )
         self._stop_requested = False
+        self._interrupt_event.clear()  # Reset interrupt signal
         
         logger.info(f"🎭 Starting NPC conversation: {config.npc1_id} {'↔ ' + config.npc2_id if config.npc2_id else '(monologue)'}, {config.total_turns} turns")
         self._notify_state_update()
@@ -185,13 +190,26 @@ class NPCConversationOrchestrator:
         self._conversation_task = asyncio.create_task(self._conversation_loop())
         return True
     
-    def stop_conversation(self):
-        """Request the conversation to stop."""
+    def stop_conversation(self, reason: str = "manual"):
+        """
+        Request the conversation to stop immediately.
+        
+        Args:
+            reason: Why the conversation is being stopped (e.g., "player_speaking", "manual")
+        """
         if self.state.state == ConversationState.RUNNING:
-            logger.info("🎭 Stop requested for NPC conversation")
+            logger.info(f"🎭 Stop requested for NPC conversation (reason: {reason})")
             self._stop_requested = True
+            self._interrupt_event.set()  # Signal immediate interruption
             self.state.state = ConversationState.STOPPING
             self._notify_state_update()
+            
+            # Notify clients to stop audio playback immediately
+            if self.on_conversation_interrupted:
+                try:
+                    self.on_conversation_interrupted()
+                except Exception as e:
+                    logger.error(f"🎭 Error in conversation interrupted callback: {e}")
     
     async def _conversation_loop(self):
         """Main conversation loop."""
@@ -213,6 +231,11 @@ class NPCConversationOrchestrator:
                 logger.info(f"🎭 Turn {self.state.current_turn}/{config.total_turns}: {speaker_id} speaks" + 
                            (f" (last turn)" if is_last_turn else "") + f", listener: {listener_id}")
                 
+                # Check for interruption before generating
+                if self._stop_requested:
+                    logger.info("🎭 Conversation interrupted before LLM generation")
+                    break
+                
                 # Generate the response (with timing)
                 llm_start = time.time()
                 turn = await self._generate_turn(
@@ -223,6 +246,11 @@ class NPCConversationOrchestrator:
                     context=config.context if self.state.current_turn == 1 else None
                 )
                 llm_time_ms = (time.time() - llm_start) * 1000
+                
+                # Check if interrupted during LLM generation
+                if self._stop_requested:
+                    logger.info("🎭 Conversation interrupted during LLM generation")
+                    break
                 
                 if turn is None:
                     logger.error("🎭 Failed to generate turn")
@@ -235,6 +263,11 @@ class NPCConversationOrchestrator:
                 # Update inter-NPC history for both characters
                 await self._update_inter_npc_history(speaker_id, listener_id, turn.message)
                 
+                # Check for interruption before TTS
+                if self._stop_requested:
+                    logger.info("🎭 Conversation interrupted before TTS generation")
+                    break
+                
                 # Generate TTS and notify (with timing)
                 tts_start = time.time()
                 audio_bytes = None
@@ -243,6 +276,11 @@ class NPCConversationOrchestrator:
                 except Exception as e:
                     logger.error(f"🎭 TTS failed for {speaker_id}: {e}")
                 tts_time_ms = (time.time() - tts_start) * 1000
+                
+                # Check if interrupted during TTS generation - don't broadcast if so
+                if self._stop_requested:
+                    logger.info("🎭 Conversation interrupted during TTS - not broadcasting turn")
+                    break
                 
                 # Log the turn
                 conv_logger = get_conversation_logger()
@@ -257,8 +295,8 @@ class NPCConversationOrchestrator:
                         tts_time_ms=tts_time_ms
                     )
                 
-                # Notify even if TTS failed (text still shows)
-                if self.on_turn_complete:
+                # Notify even if TTS failed (text still shows) - but NOT if interrupted
+                if self.on_turn_complete and not self._stop_requested:
                     try:
                         self.on_turn_complete(turn, audio_bytes)
                     except Exception as e:
@@ -276,10 +314,15 @@ class NPCConversationOrchestrator:
                 
                 logger.info(f"🎭 === TURN {self.state.current_turn - 1} COMPLETE === Next speaker: {self.state.current_speaker}, Remaining: {self.state.turns_remaining}")
                 
-                # Small delay between turns for natural pacing
+                # Small delay between turns for natural pacing - but check for interrupt
                 if self.state.turns_remaining > 0 and not self._stop_requested:
                     logger.info(f"🎭 Waiting 0.5s before next turn...")
-                    await asyncio.sleep(0.5)
+                    # Use shorter sleep intervals so we can respond to interrupts faster
+                    for _ in range(5):  # 5 x 0.1s = 0.5s total
+                        if self._stop_requested:
+                            logger.info("🎭 Conversation interrupted during pause")
+                            break
+                        await asyncio.sleep(0.1)
             
             # Conversation finished
             self.state.state = ConversationState.FINISHED
@@ -395,7 +438,12 @@ class NPCConversationOrchestrator:
         listener_id: Optional[str],
         speaker_id: str
     ) -> Optional[str]:
-        """Generate LLM response (runs in thread)."""
+        """Generate LLM response (runs in thread). Returns None if interrupted."""
+        # Check for interruption before starting
+        if self._stop_requested:
+            logger.info(f"🎭 LLM generation cancelled for {speaker_id} - stop requested")
+            return None
+            
         try:
             logger.info(f"🎭 LLM generating for {speaker_id}: {prompt[:80]}...")
 
@@ -410,6 +458,35 @@ class NPCConversationOrchestrator:
                     return t
                 return " ".join(parts[:max_sentences]).strip()
 
+            def _strip_meta_prefix(text: str) -> str:
+                """
+                Strip screenplay/meta prefixes that should never be spoken, e.g.:
+                - [Director's note] ...
+                - (aside) ...
+                - Director's note: ...
+                - Note: ...
+                Only applies to the *start* of the utterance; keeps the actual line.
+                """
+                t = (text or "").strip()
+                if not t:
+                    return ""
+
+                # Remove common "meta" leading tags in brackets/parentheses (repeat a few times)
+                # Examples: [Director's note], [Directors note], [aside], [laughs], (whispers)
+                for _ in range(4):
+                    new_t = re.sub(r"^\s*[\[\(]\s*[^]\)]{1,120}\s*[\]\)]\s*", "", t)
+                    if new_t == t:
+                        break
+                    t = new_t.strip()
+
+                # Remove explicit meta prefixes
+                t = re.sub(r"^\s*(director'?s\s*note|directors\s*note|note|narrator|stage\s*direction)\s*:\s*",
+                           "",
+                           t,
+                           flags=re.IGNORECASE)
+
+                return t.strip()
+
             def _sanitize_single_speaker(text: str) -> str:
                 """
                 Remove scripted multi-speaker formatting.
@@ -422,6 +499,9 @@ class NPCConversationOrchestrator:
                 # Strip surrounding quotes
                 if (t.startswith('"') and t.endswith('"')) or (t.startswith("“") and t.endswith("”")):
                     t = t[1:-1].strip()
+
+                # Strip meta prefixes like [Director's note] before we cut/label-strip
+                t = _strip_meta_prefix(t)
 
                 # Cut at first newline (screenplay formatting often uses multiple lines)
                 t = t.splitlines()[0].strip()
@@ -443,6 +523,9 @@ class NPCConversationOrchestrator:
                     m = re.search(rf"\b{re.escape(listener_id)}\s*:", t, flags=re.IGNORECASE)
                     if m:
                         t = t[: m.start()].strip()
+
+                # Final pass: strip any leftover meta prefix after label removal
+                t = _strip_meta_prefix(t)
 
                 return t.strip()
             
@@ -493,6 +576,10 @@ class NPCConversationOrchestrator:
                     f"{listener_id}:" if listener_id else "",
                 ],
             ):
+                # Check for interruption during generation
+                if self._stop_requested:
+                    logger.info(f"🎭 LLM generation interrupted for {speaker_id}")
+                    return None
                 full_response += chunk
             
             logger.info(f"🎭 LLM response for {speaker_id}: {full_response[:100]}...")
@@ -502,14 +589,19 @@ class NPCConversationOrchestrator:
             cleaned = _truncate_sentences(cleaned, max_sentences=2)
 
             logger.info(f"🎭 Cleaned response for {speaker_id}: {cleaned[:120]}...")
-            return cleaned
+            return cleaned.strip()
             
         except Exception as e:
             logger.error(f"🎭 LLM generation error for {speaker_id}: {e}", exc_info=True)
             return None
     
     async def _generate_tts(self, speaker_id: str, text: str) -> Optional[bytes]:
-        """Generate TTS audio for the turn."""
+        """Generate TTS audio for the turn. Returns None if interrupted."""
+        # Check for interruption before starting
+        if self._stop_requested:
+            logger.info(f"🎭 TTS generation cancelled for {speaker_id} - stop requested")
+            return None
+            
         pipeline = self.get_pipeline(speaker_id)
         if not pipeline:
             logger.warning(f"🎭 TTS: No pipeline for {speaker_id}")
@@ -518,25 +610,31 @@ class NPCConversationOrchestrator:
             logger.warning(f"🎭 TTS: No audio processor for {speaker_id}")
             return None
         
+        # Create a stop event that we can trigger from outside
+        import threading
+        tts_stop_event = threading.Event()
+        
         def generate_audio_sync():
             """Generate audio synchronously using AudioProcessor."""
-            import threading
             from queue import Queue, Empty
             
             try:
                 logger.info(f"🎭 Generating TTS for {speaker_id}: {text[:50]}...")
                 
-                # Create a queue and stop event for the synthesize method
+                # Create a queue for the synthesize method
                 audio_queue = Queue()
-                stop_event = threading.Event()
                 
                 # Run synthesis in current thread - it will put chunks into the queue
                 # We need to run this and collect from queue
                 audio_chunks = []
                 
                 def collect_chunks():
-                    """Collect chunks from queue until synthesis completes."""
+                    """Collect chunks from queue until synthesis completes or interrupted."""
                     while True:
+                        # Check for interruption
+                        if self._stop_requested or tts_stop_event.is_set():
+                            logger.info(f"🎭 TTS collection interrupted for {speaker_id}")
+                            break
                         try:
                             chunk = audio_queue.get(timeout=0.1)
                             if chunk is None:  # End signal
@@ -544,7 +642,7 @@ class NPCConversationOrchestrator:
                             if chunk:
                                 audio_chunks.append(chunk)
                         except Empty:
-                            if stop_event.is_set():
+                            if tts_stop_event.is_set():
                                 break
                             continue
                 
@@ -552,17 +650,22 @@ class NPCConversationOrchestrator:
                 collector = threading.Thread(target=collect_chunks, daemon=True)
                 collector.start()
                 
-                # Run synthesis (blocking)
+                # Run synthesis (blocking) - pass the stop event so it can be interrupted
                 completed = pipeline.audio.synthesize(
                     text=text,
                     audio_chunks=audio_queue,
-                    stop_event=stop_event,
+                    stop_event=tts_stop_event,
                     generation_string=f"npc_conv_{speaker_id}"
                 )
                 
                 # Signal end and wait for collector
                 audio_queue.put(None)
                 collector.join(timeout=5.0)
+                
+                # Check if we were interrupted
+                if self._stop_requested:
+                    logger.info(f"🎭 TTS interrupted during synthesis for {speaker_id}")
+                    return None
                 
                 if audio_chunks:
                     audio_data = b''.join(audio_chunks)
@@ -577,7 +680,15 @@ class NPCConversationOrchestrator:
                 return None
         
         try:
-            return await asyncio.to_thread(generate_audio_sync)
+            # Check periodically if we should abort while waiting for TTS
+            result = await asyncio.to_thread(generate_audio_sync)
+            
+            # Final check for interruption
+            if self._stop_requested:
+                logger.info(f"🎭 TTS result discarded for {speaker_id} - stop requested")
+                return None
+                
+            return result
         except Exception as e:
             logger.error(f"🎭 TTS generation error for {speaker_id}: {e}", exc_info=True)
             return None
