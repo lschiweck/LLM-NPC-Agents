@@ -373,12 +373,18 @@ function handleJSONMessage(entry, { type, content }) {
   if (type === "partial_user_request") {
     typing.user = content?.trim() ? escapeHtml(content) : "";
     if (entry.id === activeCharacterId) renderMessages();
+    // Player is speaking! Trigger speaking detection for injection suppression
+    if (content?.trim()) {
+      onPlayerSpeaking();
+    }
     return;
   }
 
   if (type === "final_user_request") {
     if (content?.trim()) {
       history.push({ role: "user", content, type: "final" });
+      // Player spoke - suppress injections
+      onPlayerSpeaking();
     }
     typing.user = "";
     if (entry.id === activeCharacterId) renderMessages();
@@ -397,6 +403,8 @@ function handleJSONMessage(entry, { type, content }) {
     }
     typing.assistant = "";
     if (entry.id === activeCharacterId) renderMessages();
+    // NPC finished speaking to player - trigger engagement buffer + timer reset
+    onNpcFinishedSpeaking();
     return;
   }
 
@@ -1035,8 +1043,11 @@ function handleNpcConvAvailableCharacters(data) {
 }
 
 function handleNpcConvStateUpdate(data) {
+  const wasRunning = npcConvState.state === "running";
+  const newState = data.state || "idle";
+  
   npcConvState = {
-    state: data.state || "idle",
+    state: newState,
     config: data.config,
     current_turn: data.current_turn || 0,
     turns_remaining: data.turns_remaining || 0,
@@ -1046,6 +1057,18 @@ function handleNpcConvStateUpdate(data) {
   };
   
   renderNpcConversation();
+  
+  // Detect when NPC-to-NPC conversation ends → schedule next injection timer
+  const isNowNotRunning = newState !== "running";
+  if (wasRunning && isNowNotRunning) {
+    npcConversationRunning = false;
+    debugLog(`NPC conv ended (${newState}) - starting timer`, "success");
+    
+    // Schedule next tick after conversation ends
+    if (autoInjectionEnabled) {
+      scheduleNextTick();
+    }
+  }
 }
 
 function handleNpcConvTurn(data) {
@@ -1072,6 +1095,11 @@ function handleNpcConvTurn(data) {
 
 function handleNpcConvInterrupted(data) {
   console.log(`[NPC Conv] 🛑 Conversation interrupted: ${data.reason || 'player speaking'}`);
+  
+  // Player is speaking! Trigger the speaking cooldown
+  if (data.reason === 'player_speaking' || !data.reason) {
+    onPlayerSpeaking();
+  }
   
   // Clear the audio queue immediately
   npcConvAudioQueue = [];
@@ -1291,3 +1319,550 @@ if (npcConvStopBtn) {
 
 // Initialize NPC Conversation connection
 initNpcConversation();
+
+// ==================== NPC INJECTION TRIGGER SYSTEM ====================
+
+// Injection prompts loaded from server
+let injectionConfig = null;
+
+// Trigger states
+// Fallback triggers (continuity, self_directed) are ALWAYS active
+// Location triggers (sudoku, kitchen) override fallbacks when active
+const triggerStates = {
+  player_at_sudoku: false,      // Location-based, manual toggle
+  player_in_kitchen: false,     // Location-based, manual toggle
+  player_away_from_npcs: true,  // ALWAYS ON (fallback)
+  conversation_lull: true       // ALWAYS ON (fallback)
+};
+
+// Engagement state
+let playerInNpcZone = false;
+let playerEngagedUntil = 0;  // Timestamp until which player is "engaged" (no injections)
+const NPC_RESPONSE_BUFFER_MS = 5000;  // 5 seconds after NPC finishes speaking
+
+// UI Elements
+const engagementStatus = document.getElementById("engagementStatus");
+const btnInNpcZone = document.getElementById("btnInNpcZone");
+const injectionDebugLog = document.getElementById("injectionDebugLog");
+const injectionTimer = document.getElementById("injectionTimer");
+
+// Debug logging to UI
+function debugLog(msg, type = "info") {
+  const timestamp = new Date().toLocaleTimeString('en-US', { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' });
+  const colors = { info: "#aaa", success: "#4ade80", warn: "#fbbf24", error: "#ef4444", fire: "#f97316" };
+  const color = colors[type] || colors.info;
+  
+  console.log(`[Injection] ${msg}`);
+  
+  if (injectionDebugLog) {
+    const line = document.createElement("div");
+    line.style.color = color;
+    line.textContent = `${timestamp} ${msg}`;
+    injectionDebugLog.appendChild(line);
+    // Keep only last 10 lines
+    while (injectionDebugLog.children.length > 10) {
+      injectionDebugLog.removeChild(injectionDebugLog.firstChild);
+    }
+    injectionDebugLog.scrollTop = injectionDebugLog.scrollHeight;
+  }
+}
+// Location-based trigger UI elements (toggleable)
+const btnSudokuToggle = document.getElementById("btnSudokuToggle");
+const btnKitchenToggle = document.getElementById("btnKitchenToggle");
+const badgeSudoku = document.getElementById("badgeSudoku");
+const badgeKitchen = document.getElementById("badgeKitchen");
+const triggerSudoku = document.getElementById("triggerSudoku");
+const triggerKitchen = document.getElementById("triggerKitchen");
+// Fallback triggers are always-on, no toggle needed
+const timingBaseInterval = document.getElementById("timingBaseInterval");
+const timingRandomOffset = document.getElementById("timingRandomOffset");
+const timingTurns = document.getElementById("timingTurns");
+
+// Load injection config from server
+async function loadInjectionConfig() {
+  try {
+    const resp = await fetch("/npc_injection_config");
+    if (resp.ok) {
+      injectionConfig = await resp.json();
+      console.log("[InjectionTrigger] Loaded config:", injectionConfig);
+    } else {
+      console.warn("[InjectionTrigger] Could not load config, using defaults");
+      injectionConfig = createDefaultInjectionConfig();
+    }
+  } catch (e) {
+    console.error("[InjectionTrigger] Failed to load config:", e);
+    injectionConfig = createDefaultInjectionConfig();
+  }
+}
+
+function createDefaultInjectionConfig() {
+  return {
+    injections: {
+      sudoku: {
+        prompts: [
+          { prompt: "Start a brief exchange about staying patient with the Sudoku puzzle." },
+          { prompt: "Start a brief exchange about not rushing the Sudoku." }
+        ]
+      },
+      kitchen_safe: {
+        prompts: [
+          { prompt: "Start a brief exchange about the safe in the kitchen feeling unusual." },
+          { prompt: "Start a brief exchange where one frames a kitchen safe as normal and the other as odd." }
+        ]
+      },
+      continuity: {
+        prompts: [
+          { prompt: "Continue your current topic briefly when there is no new input." },
+          { prompt: "Have a short check-in about staying calm during the silence." }
+        ]
+      },
+      self_directed: {
+        isMonologue: true,
+        prompts: [
+          { prompt: "Mutter to yourself something like 'Stay calm... just stay calm.' - a short self-reassurance." },
+          { prompt: "Mutter to yourself something like 'This tension is unbearable...' - commenting on the atmosphere." }
+        ]
+      }
+    }
+  };
+}
+
+// Check if injection is allowed
+function canInject() {
+  // If player is in NPC zone (near NPCs), suppress
+  if (playerInNpcZone) return false;
+  
+  // If player is engaged (speaking + waiting for NPC + buffer), suppress
+  if (Date.now() < playerEngagedUntil) return false;
+  
+  return true;
+}
+
+// Called when player starts speaking (suppress immediately)
+function onPlayerSpeaking() {
+  // Set engaged until far in the future - will be updated when NPC finishes
+  playerEngagedUntil = Date.now() + 60000; // 60s max, updated when NPC responds
+  debugLog("🎤 Player speaking...", "warn");
+  updateEngagementUI();
+}
+
+// Called when NPC finishes responding to player
+function onNpcFinishedSpeaking() {
+  // After NPC finishes, wait buffer time, then reset the injection timer
+  const bufferEndTime = Date.now() + NPC_RESPONSE_BUFFER_MS;
+  playerEngagedUntil = bufferEndTime;
+  
+  debugLog(`💬 NPC done - ${NPC_RESPONSE_BUFFER_MS/1000}s buffer, then timer reset`, "info");
+  
+  // Schedule timer reset after buffer
+  setTimeout(() => {
+    if (autoInjectionEnabled) {
+      debugLog("⏱️ Timer reset (conversation ended)", "success");
+      scheduleNextTick(); // This resets the timer to base + random
+    }
+  }, NPC_RESPONSE_BUFFER_MS);
+  
+  updateEngagementUI();
+}
+
+// Update engagement UI
+function updateEngagementUI() {
+  const allowed = canInject();
+  const engagedRemaining = playerEngagedUntil - Date.now();
+  const isEngaged = engagedRemaining > 0;
+  
+  if (engagementStatus) {
+    let statusText = "● Can inject";
+    if (playerInNpcZone) {
+      statusText = "● In NPC Zone";
+    } else if (isEngaged) {
+      const remaining = Math.ceil(engagedRemaining / 1000);
+      statusText = `● Engaged (${remaining}s)`;
+    }
+    engagementStatus.textContent = statusText;
+    engagementStatus.className = "engagement-status " + (allowed ? "allowed" : "suppressed");
+  }
+  
+  if (btnInNpcZone) {
+    btnInNpcZone.classList.toggle("active", playerInNpcZone);
+    btnInNpcZone.textContent = playerInNpcZone ? "✓ In NPC Zone (ON)" : "In NPC Zone";
+  }
+}
+
+// Update trigger toggle UI (only for location-based triggers that can be toggled)
+function updateTriggerUI(triggerName, isActive) {
+  // Only location-based triggers have toggle UI
+  const mapping = {
+    player_at_sudoku: { badge: badgeSudoku, card: triggerSudoku, btn: btnSudokuToggle },
+    player_in_kitchen: { badge: badgeKitchen, card: triggerKitchen, btn: btnKitchenToggle }
+    // Continuity and Self-Directed are always on - no UI updates needed
+  };
+  
+  const el = mapping[triggerName];
+  if (!el) return;
+  
+  if (el.badge) {
+    el.badge.textContent = isActive ? "active" : "inactive";
+    el.badge.className = "trigger-category-badge " + (isActive ? "active" : "inactive");
+  }
+  if (el.card) {
+    el.card.classList.toggle("active", isActive);
+  }
+  if (el.btn) {
+    el.btn.textContent = isActive ? "Deactivate" : "Activate";
+    el.btn.className = "trigger-toggle-btn " + (isActive ? "deactivate" : "activate");
+  }
+}
+
+// Toggle a trigger
+function toggleTrigger(triggerName) {
+  triggerStates[triggerName] = !triggerStates[triggerName];
+  updateTriggerUI(triggerName, triggerStates[triggerName]);
+  
+  const names = {
+    player_at_sudoku: "Sudoku",
+    player_in_kitchen: "Kitchen",
+    player_away_from_npcs: "Continuity",
+    conversation_lull: "Self-Directed"
+  };
+  debugLog(`${names[triggerName] || triggerName}: ${triggerStates[triggerName] ? 'ON' : 'OFF'}`, triggerStates[triggerName] ? "success" : "info");
+}
+
+// Get a random prompt from a category
+function getRandomPrompt(categoryId) {
+  if (!injectionConfig || !injectionConfig.injections) return null;
+  const category = injectionConfig.injections[categoryId];
+  if (!category || !category.prompts || category.prompts.length === 0) return null;
+  const idx = Math.floor(Math.random() * category.prompts.length);
+  return category.prompts[idx];
+}
+
+// Get random turns (2-4 for dialogues, always 1 for monologues)
+function getRandomTurns(isMonologue) {
+  if (isMonologue) return 1;
+  return Math.floor(Math.random() * 3) + 2; // 2, 3, or 4
+}
+
+// Execute an injection (start NPC conversation)
+function executeInjection(categoryId, isAutomatic = false) {
+  if (!canInject()) {
+    if (!isAutomatic) {
+      debugLog("Blocked: player in NPC zone", "error");
+      alert("Cannot inject - player is in NPC zone. Toggle it off first.");
+    }
+    return false;
+  }
+  
+  // Check if NPC conversation is already running
+  if (npcConvState.state === "running") {
+    if (!isAutomatic) {
+      debugLog("Blocked: conversation running", "warn");
+    }
+    return false;
+  }
+  
+  const prompt = getRandomPrompt(categoryId);
+  if (!prompt) {
+    debugLog(`No prompt for: ${categoryId}`, "error");
+    return false;
+  }
+  
+  const category = injectionConfig?.injections?.[categoryId];
+  const isMonologue = category?.isMonologue || false;
+  
+  // Get NPC IDs from the NPC conversation panel or use connected characters
+  const npc1 = npcConvNpc1?.value || npcConvConnectedCharacters[0] || "LisaParker";
+  const npc2 = isMonologue ? "" : (npcConvNpc2?.value || npcConvConnectedCharacters[1] || "PaulAdams");
+  const turns = getRandomTurns(isMonologue);
+  
+  debugLog(`Starting: ${categoryId} (${isMonologue ? 'mono' : turns + ' turns'})`, "fire");
+  
+  // Send via NPC conversation WebSocket
+  if (npcConvWebSocket && npcConvWebSocket.readyState === WebSocket.OPEN) {
+    // Clear previous conversation
+    npcConvState.conversation_history = [];
+    npcConvAudioQueue = [];
+    renderNpcConvMessages();
+    
+    npcConvWebSocket.send(JSON.stringify({
+      type: "start_conversation",
+      npc1_id: npc1,
+      npc2_id: npc2,
+      turns: turns,
+      context: prompt.prompt
+    }));
+    
+    // Also update the context textarea to show what was injected
+    if (npcConvContext) {
+      npcConvContext.value = prompt.prompt;
+    }
+    
+    return true;
+  } else {
+    if (!isAutomatic) {
+      alert("NPC Conversation WebSocket not connected!");
+    }
+    return false;
+  }
+}
+
+// Setup toggle button handlers
+if (btnSudokuToggle) {
+  btnSudokuToggle.onclick = () => toggleTrigger("player_at_sudoku");
+}
+if (btnKitchenToggle) {
+  btnKitchenToggle.onclick = () => toggleTrigger("player_in_kitchen");
+}
+// Continuity and Self-Directed are ALWAYS ON - no toggle handlers needed
+
+// Setup inject button handlers
+document.querySelectorAll(".trigger-inject-btn").forEach(btn => {
+  btn.onclick = () => {
+    const categoryId = btn.dataset.category;
+    if (categoryId) {
+      executeInjection(categoryId);
+    }
+  };
+});
+
+// Engagement controls
+if (btnInNpcZone) {
+  btnInNpcZone.onclick = () => {
+    playerInNpcZone = !playerInNpcZone;
+    updateEngagementUI();
+    debugLog(`NPC Zone: ${playerInNpcZone ? 'ON (suppressing)' : 'OFF'}`, playerInNpcZone ? "warn" : "success");
+  };
+}
+
+// Periodically update engagement UI (for speaking cooldown countdown)
+setInterval(updateEngagementUI, 500);
+
+// ==================== AUTOMATIC INJECTION LOOP ====================
+
+let autoInjectionEnabled = false;
+let autoInjectionTimer = null;
+let nextTickTime = 0;
+let timerUpdateInterval = null;
+let npcConversationRunning = false; // Track if NPC-to-NPC conversation is active
+
+// Get next wait time (base + random offset)
+function getNextWaitTime() {
+  const base = parseInt(timingBaseInterval?.value) || 20;
+  const randomMax = parseInt(timingRandomOffset?.value) || 15;
+  const randomOffset = Math.random() * randomMax;
+  return (base + randomOffset) * 1000; // Convert to ms
+}
+
+// Update the timer display
+function updateTimerDisplay() {
+  if (!injectionTimer) return;
+  
+  if (!autoInjectionEnabled) {
+    injectionTimer.textContent = "⏱️ Auto: OFF";
+    return;
+  }
+  
+  const remaining = Math.max(0, nextTickTime - Date.now());
+  const secs = Math.ceil(remaining / 1000);
+  
+  // Count triggers and check which are effective
+  const locationActive = triggerStates.player_at_sudoku || triggerStates.player_in_kitchen;
+  const locationCount = (triggerStates.player_at_sudoku ? 1 : 0) + (triggerStates.player_in_kitchen ? 1 : 0);
+  const fallbackCount = (triggerStates.player_away_from_npcs ? 1 : 0) + (triggerStates.conversation_lull ? 1 : 0);
+  
+  // Effective count: location triggers always count, fallback only if no location active
+  const effectiveCount = locationActive ? locationCount : (locationCount + fallbackCount);
+  
+  // Check why we can't inject
+  const engagedRemaining = playerEngagedUntil - Date.now();
+  const isEngaged = engagedRemaining > 0;
+  
+  if (npcConvState.state === "running" || npcConversationRunning) {
+    injectionTimer.textContent = `⏱️ NPC conv running...`;
+  } else if (playerInNpcZone) {
+    injectionTimer.textContent = `⏱️ Suppressed (NPC zone)`;
+  } else if (isEngaged) {
+    const engagedSecs = Math.ceil(engagedRemaining / 1000);
+    injectionTimer.textContent = `⏱️ Player engaged: ${engagedSecs}s`;
+  } else if (effectiveCount === 0) {
+    injectionTimer.textContent = `⏱️ ${secs}s (no triggers!)`;
+  } else {
+    let info = `${effectiveCount} ready`;
+    if (locationActive && fallbackCount > 0) {
+      info += `, ${fallbackCount} skip`;
+    }
+    injectionTimer.textContent = `⏱️ ${secs}s (${info})`;
+  }
+}
+
+// Find the best active trigger to fire
+function findBestActiveTrigger() {
+  let best = null;
+  let bestPriority = -999;
+  
+  // Map trigger names to categories and priorities
+  // Location-based triggers (priority 1) suppress fallback triggers (priority 0)
+  // No per-trigger cooldowns - the main timer handles spacing
+  const triggerMap = {
+    player_at_sudoku: { category: "sudoku", priority: 1, name: "Sudoku", isLocation: true },
+    player_in_kitchen: { category: "kitchen_safe", priority: 1, name: "Kitchen", isLocation: true },
+    player_away_from_npcs: { category: "continuity", priority: 0, name: "Continuity", isLocation: false },
+    conversation_lull: { category: "self_directed", priority: 0, name: "Self-Dir", isLocation: false }
+  };
+  
+  // Check if any location-based trigger is active
+  const locationTriggerActive = triggerStates.player_at_sudoku || triggerStates.player_in_kitchen;
+  
+  for (const [triggerName, config] of Object.entries(triggerMap)) {
+    // Skip inactive triggers
+    if (!triggerStates[triggerName]) continue;
+    
+    // If a location trigger is active, skip fallback triggers entirely
+    if (locationTriggerActive && !config.isLocation) {
+      continue;
+    }
+    
+    // Higher priority wins
+    if (config.priority > bestPriority) {
+      best = { triggerName, ...config };
+      bestPriority = config.priority;
+    }
+  }
+  
+  return best;
+}
+
+// Auto injection tick
+function autoInjectionTick() {
+  if (!autoInjectionEnabled) {
+    debugLog("Tick skipped - auto OFF", "info");
+    return;
+  }
+  
+  debugLog("--- TICK ---", "info");
+  
+  // Check if we can inject
+  if (!canInject()) {
+    const engagedRemaining = playerEngagedUntil - Date.now();
+    
+    if (playerInNpcZone) {
+      debugLog("Skipped: in NPC zone", "warn");
+    } else if (engagedRemaining > 0) {
+      debugLog(`Skipped: player engaged ${Math.ceil(engagedRemaining / 1000)}s`, "warn");
+    } else {
+      debugLog("Skipped: engagement", "warn");
+    }
+    scheduleNextTick();
+    return;
+  }
+  
+  // Check if conversation is running
+  if (npcConvState.state === "running") {
+    debugLog("Skipped: conversation running", "warn");
+    scheduleNextTick();
+    return;
+  }
+  
+  // Find best trigger to fire
+  const trigger = findBestActiveTrigger();
+  
+  if (trigger) {
+    debugLog(`🔥 FIRING: ${trigger.name}`, "fire");
+    const success = executeInjection(trigger.category, true);
+    if (success) {
+      npcConversationRunning = true;
+      debugLog("Started! Waiting for conv to end...", "success");
+      
+      // Fallback: if conversation doesn't report end within 60s, restart timer anyway
+      setTimeout(() => {
+        if (npcConversationRunning && autoInjectionEnabled) {
+          debugLog("Fallback: conv timeout, restarting timer", "warn");
+          npcConversationRunning = false;
+          scheduleNextTick();
+        }
+      }, 60000);
+      
+      // Don't schedule next tick yet - wait for conversation to end
+      return;
+    } else {
+      debugLog("Injection failed!", "error");
+    }
+  } else {
+    debugLog("No triggers ready (all on cooldown or inactive)", "warn");
+  }
+  
+  scheduleNextTick();
+}
+
+// Schedule next auto injection check
+function scheduleNextTick() {
+  if (autoInjectionTimer) {
+    clearTimeout(autoInjectionTimer);
+  }
+  
+  if (!autoInjectionEnabled) {
+    nextTickTime = 0;
+    updateTimerDisplay();
+    return;
+  }
+  
+  const waitTime = getNextWaitTime();
+  nextTickTime = Date.now() + waitTime;
+  debugLog(`Next tick in ${(waitTime/1000).toFixed(1)}s`, "info");
+  autoInjectionTimer = setTimeout(autoInjectionTick, waitTime);
+}
+
+// Toggle auto injection
+function setAutoInjectionEnabled(enabled) {
+  autoInjectionEnabled = enabled;
+  debugLog(`Auto injection: ${enabled ? 'ON' : 'OFF'}`, enabled ? "success" : "warn");
+  
+  if (enabled) {
+    scheduleNextTick();
+    // Start timer update interval
+    if (!timerUpdateInterval) {
+      timerUpdateInterval = setInterval(updateTimerDisplay, 1000);
+    }
+  } else {
+    if (autoInjectionTimer) {
+      clearTimeout(autoInjectionTimer);
+      autoInjectionTimer = null;
+    }
+    nextTickTime = 0;
+  }
+  
+  updateTimerDisplay();
+  
+  // Update UI
+  const autoBtn = document.getElementById("btnAutoInjection");
+  if (autoBtn) {
+    autoBtn.textContent = enabled ? "🔴 Stop Auto" : "🟢 Start Auto";
+    autoBtn.style.background = enabled ? "rgba(239, 68, 68, 0.3)" : "rgba(74, 222, 128, 0.3)";
+    autoBtn.style.color = enabled ? "#ef4444" : "#4ade80";
+    autoBtn.style.borderColor = enabled ? "rgba(239, 68, 68, 0.4)" : "rgba(74, 222, 128, 0.4)";
+  }
+}
+
+// Auto injection toggle button
+const btnAutoInjection = document.getElementById("btnAutoInjection");
+if (btnAutoInjection) {
+  btnAutoInjection.onclick = () => {
+    setAutoInjectionEnabled(!autoInjectionEnabled);
+  };
+}
+
+// Initialize
+loadInjectionConfig();
+
+// Start the timer update interval (shows status even when auto is off)
+timerUpdateInterval = setInterval(updateTimerDisplay, 1000);
+
+// Initialize debug display
+setTimeout(() => {
+  debugLog("System ready", "success");
+  debugLog("1. Activate triggers", "info");
+  debugLog("2. Click 'Start Auto'", "info");
+  updateTimerDisplay();
+}, 1000);
+
+console.log("[InjectionTrigger] System initialized");

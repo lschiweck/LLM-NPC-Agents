@@ -72,12 +72,22 @@ class CharacterSession:
                 task.cancel()
         self.tasks.clear()
 
+        # IMPORTANT:
+        # Do NOT shutdown and discard AudioInputProcessor on disconnect.
+        # It is expensive to initialize (Whisper/VAD/turn detection), and tearing it down
+        # causes long "it feels bugged" stalls on reconnects (as seen in logs ~17s).
+        #
+        # Instead: detach callbacks and leave the processor warm. Full shutdown still happens
+        # in CharacterSession.shutdown() on server shutdown.
         if self.audio_input:
             try:
-                self.audio_input.shutdown()
+                self.audio_input.realtime_callback = None
+                self.audio_input.recording_start_callback = None
+                self.audio_input.silence_active_callback = None
+                self.audio_input.interrupted = False
+                self.audio_input.last_partial_text = None
             except Exception as exc:
-                logger.warning(f"🖥️⚠️ Failed to shutdown audio input for {self.character_id}: {exc}")
-        self.audio_input = None
+                logger.warning(f"🖥️⚠️ Failed to detach audio callbacks for {self.character_id}: {exc}")
         self.callbacks = None
         self.message_queue = None
         self.audio_queue = None
@@ -181,6 +191,63 @@ def load_character_config() -> Dict[str, Dict[str, Any]]:
     return {}
 
 
+def load_story_bible() -> str:
+    """
+    Load the shared canon story bible that all NPCs should follow.
+    This is prepended to each character's game_knowledge (Layer 3) so both
+    player↔NPC and NPC↔NPC conversations stay coherent and on-topic.
+    """
+    story_path = Path(__file__).resolve().parent / "story_bible.txt"
+    try:
+        if story_path.exists():
+            text = story_path.read_text(encoding="utf-8").strip()
+            if text:
+                logger.info(f"📚 Loaded story bible from {story_path.name} ({len(text)} chars)")
+                return text
+    except Exception as exc:
+        logger.warning(f"📚⚠️ Failed to read story bible: {exc}")
+    return ""
+
+
+def combine_game_knowledge(story_bible: str, character_game_knowledge: Optional[str]) -> Optional[str]:
+    """
+    Combine shared canon story bible with per-character knowledge.
+    Kept deliberately simple to avoid breaking the prompt layering.
+    """
+    sb = (story_bible or "").strip()
+    ck = (character_game_knowledge or "").strip()
+    if sb and ck:
+        return f"{sb}\n\n--- CHARACTER-SPECIFIC FACTS ---\n{ck}".strip()
+    if sb:
+        return sb
+    if ck:
+        return ck
+    return None
+
+
+def audio_input_needs_recreate(audio_input: Optional["AudioInputProcessor"]) -> bool:
+    """
+    Determine whether the AudioInputProcessor should be recreated.
+    We keep it warm across disconnects, but if its background transcription task
+    has died or it marked itself as failed, reusing it will make the character
+    feel "bugged" forever until a server restart.
+    """
+    if audio_input is None:
+        return True
+    if getattr(audio_input, "_transcription_failed", False):
+        return True
+    task = getattr(audio_input, "transcription_task", None)
+    if task is None:
+        return True
+    try:
+        if task.done():
+            return True
+    except Exception:
+        # If anything about task state is weird, recreate.
+        return True
+    return False
+
+
 # --------------------------------------------------------------------
 # Lifespan management
 # --------------------------------------------------------------------
@@ -201,6 +268,9 @@ async def lifespan(app: FastAPI):
     # Many callbacks (e.g. on_recording_start) are triggered from asyncio.to_thread(...) and thus
     # do NOT have a running event loop.
     app.state.main_loop = asyncio.get_running_loop()
+
+    # Shared canon story bible (used to keep all NPCs coherent and on-topic)
+    app.state.StoryBible = load_story_bible()
 
     def _schedule_on_main_loop(coro):
         """
@@ -264,7 +334,10 @@ async def lifespan(app: FastAPI):
                     
                     # Extract prompt layers
                     personality = char_config.get("personality")
-                    game_knowledge = char_config.get("game_knowledge")
+                    game_knowledge = combine_game_knowledge(
+                        getattr(app.state, "StoryBible", ""),
+                        char_config.get("game_knowledge"),
+                    )
                     system_prompt = char_config.get("system_prompt") if not personality and not game_knowledge else None
                     
                     # Create pipeline (this loads TTS/LLM models)
@@ -584,6 +657,17 @@ async def list_characters():
         for cid, config in app.state.CharacterConfig.items()
     ]
 
+@app.get("/npc_injection_config")
+async def get_npc_injection_config():
+    """Get the NPC injection trigger configuration."""
+    import json
+    config_path = Path(__file__).parent / "npc_conversation_injections.json"
+    if config_path.exists():
+        with open(config_path, "r", encoding="utf-8") as f:
+            return json.load(f)
+    else:
+        return {"error": "Config file not found"}
+
 @app.get("/game_manager/status")
 async def game_manager_status():
     """Get current Game Manager status."""
@@ -687,6 +771,10 @@ async def npc_conversation_websocket(ws: WebSocket):
                 turns = int(data.get("turns", 2))
                 context = data.get("context", "").strip()
                 
+                # Trigger info (optional, for auto-triggered conversations)
+                trigger_id = data.get("trigger_id")
+                trigger_category = data.get("trigger_category")
+                
                 if not npc1:
                     await ws.send_json({"type": "error", "message": "NPC 1 is required"})
                     continue
@@ -695,7 +783,9 @@ async def npc_conversation_websocket(ws: WebSocket):
                     npc1_id=npc1,
                     npc2_id=npc2 if npc2 else None,
                     total_turns=max(1, min(turns, 20)),  # Limit 1-20 turns
-                    context=context
+                    context=context,
+                    trigger_id=trigger_id,
+                    trigger_category=trigger_category
                 )
                 
                 success = await orchestrator.start_conversation(config)
@@ -704,7 +794,7 @@ async def npc_conversation_websocket(ws: WebSocket):
                         "type": "error", 
                         "message": orchestrator.state.error or "Failed to start conversation"
                     })
-                    
+            
             elif msg_type == "stop_conversation" and orchestrator:
                 orchestrator.stop_conversation()
                 
@@ -1145,9 +1235,11 @@ class TranscriptionCallbacks:
         self.partial_transcription: str = "" # Added for clarity
         
         # Timing tracking for logging
-        self.recording_start_time: float = 0.0
-        self.llm_start_time: float = 0.0
-        self.ttfa_ms: float = 0.0  # Time To First Audio
+        self.recording_start_time: float = 0.0  # When user started speaking
+        self.llm_start_time: float = 0.0  # When LLM generation was triggered (may be before turn end due to speculative gen)
+        self.turn_end_time: float = 0.0  # When user finished speaking (THE reference point for perceived latency)
+        self.first_audio_time: float = 0.0  # When first audio chunk was synthesized
+        self.ttfa_ms: float = 0.0  # Time To First Audio: turn_end → first_audio (THE key metric)
 
         self.reset_state() # Call reset to ensure consistency
 
@@ -1177,6 +1269,12 @@ class TranscriptionCallbacks:
         self.last_inferred_transcription = ""
         self.final_assistant_answer_sent = False
         self.partial_transcription = ""
+        
+        # Reset timing variables (but keep recording_start_time as it's set per-utterance)
+        # Note: llm_start_time persists through the turn, only reset after response sent
+        self.turn_end_time = 0.0
+        self.first_audio_time = 0.0
+        self.ttfa_ms = 0.0
 
         # Keep the abort call related to the audio processor/pipeline manager
         if self.session.pipeline:
@@ -1278,6 +1376,8 @@ class TranscriptionCallbacks:
             audio: The raw audio bytes corresponding to the final transcription. (Currently unused)
             txt: The transcription text (might be slightly refined in on_final).
         """
+        # Record turn end time - THIS is when perceived latency measurement should start
+        self.turn_end_time = time.time()
         logger.info(Colors.apply('🖥️🏁 =================== USER TURN END ===================').light_gray)
         self.user_finished_turn = True
         self.user_interrupted = False # Reset connection-specific flag (user finished, not interrupted)
@@ -1404,18 +1504,17 @@ class TranscriptionCallbacks:
         Args:
             first_audio_timestamp: The time.time() when first audio was ready.
         """
-        if self.llm_start_time > 0:
+        self.first_audio_time = first_audio_timestamp
+        
+        # TTFA: Time from user turn end to first audio ready
+        # This is what the user PERCEIVES as response latency
+        if self.turn_end_time > 0:
+            self.ttfa_ms = (first_audio_timestamp - self.turn_end_time) * 1000
+            logger.info(f"🖥️🎵 TTFA: {self.ttfa_ms:.1f}ms (user stop → first audio)")
+        elif self.llm_start_time > 0:
+            # Fallback if turn_end not set (shouldn't happen normally)
             self.ttfa_ms = (first_audio_timestamp - self.llm_start_time) * 1000
-            logger.info(f"🖥️🎵 TTFA (Time To First Audio): {self.ttfa_ms:.1f}ms")
-            
-            # Log TTFA event
-            conv_logger = get_conversation_logger()
-            if conv_logger:
-                conv_logger.log_event(
-                    event_type="ttfa",
-                    character_id=self.session.character_id,
-                    ttfa_ms=self.ttfa_ms
-                )
+            logger.info(f"🖥️🎵 TTFA (fallback): {self.ttfa_ms:.1f}ms")
 
     def on_recording_start(self):
         """
@@ -1530,9 +1629,13 @@ class TranscriptionCallbacks:
                 # Log NPC response with timing
                 conv_logger = get_conversation_logger()
                 if conv_logger:
+                    now = time.time()
+                    
+                    # Total response time: from user turn end to now
                     total_time_ms = None
-                    if self.llm_start_time > 0:
-                        total_time_ms = (time.time() - self.llm_start_time) * 1000
+                    if self.turn_end_time > 0:
+                        total_time_ms = (now - self.turn_end_time) * 1000
+                    
                     conv_logger.log_npc_response(
                         character_id=self.session.character_id,
                         text=cleaned_answer,
@@ -1540,8 +1643,10 @@ class TranscriptionCallbacks:
                         ttfa_ms=self.ttfa_ms if self.ttfa_ms > 0 else None,
                         total_time_ms=total_time_ms
                     )
-                    # Reset TTFA for next response
+                    # Reset timing for next response
                     self.ttfa_ms = 0.0
+                    self.first_audio_time = 0.0
+                    self.turn_end_time = 0.0
             else:
                 logger.warning(f"🖥️⚠️ {Colors.YELLOW}Final assistant answer was empty after cleaning.{Colors.RESET}")
                 self.final_assistant_answer_sent = False # Don't mark as sent
@@ -1607,7 +1712,14 @@ async def websocket_endpoint(ws: WebSocket):
     app.state.CharacterSessions[character_id] = session
     
     
-    if session.audio_input is None:
+    if audio_input_needs_recreate(session.audio_input):
+        if session.audio_input is not None:
+            logger.warning(f"🔧 Recreating AudioInputProcessor for {character_id} (previous one was not healthy)...")
+            try:
+                session.audio_input.shutdown()
+            except Exception as e:
+                logger.warning(f"🔧⚠️ Failed to shutdown unhealthy AudioInputProcessor for {character_id}: {e}")
+
         logger.info(f"🔧 Creating new AudioInputProcessor for {character_id} (NOT pre-initialized)...")
         audio_start = time.time()
         session.audio_input = AudioInputProcessor(
@@ -1625,7 +1737,10 @@ async def websocket_endpoint(ws: WebSocket):
         # 3-Layer Prompt System: personality (Layer 2) + game_knowledge (Layer 3)
         # Layer 1 (Framework) is built-in to prompt_layers.py
         personality = session.config.get("personality")
-        game_knowledge = session.config.get("game_knowledge")
+        game_knowledge = combine_game_knowledge(
+            getattr(app.state, "StoryBible", ""),
+            session.config.get("game_knowledge"),
+        )
         # Legacy support: use system_prompt if no 3-layer fields
         system_prompt = session.config.get("system_prompt") if not personality and not game_knowledge else None
         

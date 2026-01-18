@@ -18,9 +18,9 @@ public class NpcConversationController : MonoBehaviour
     [Header("WebSocket")]
     [SerializeField] private string wsUrl = "ws://127.0.0.1:8000/ws/npc_conversation";
 
-    [Header("Auto-Trigger (Testing)")]
-    [Tooltip("Enable automatic conversations on a timer")]
-    [SerializeField] private bool autoTriggerEnabled = true;
+    [Header("Auto-Trigger (Testing/Legacy)")]
+    [Tooltip("Enable automatic conversations on a timer. Disable when using NpcInjectionTriggerSystem.")]
+    [SerializeField] private bool autoTriggerEnabled = false;
     [Tooltip("Seconds between auto-triggered conversations")]
     [SerializeField] private float autoTriggerInterval = 15f;
     [Tooltip("Number of turns per auto-triggered conversation")]

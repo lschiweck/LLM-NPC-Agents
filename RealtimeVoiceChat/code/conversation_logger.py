@@ -196,21 +196,18 @@ class ConversationLogger:
         self,
         character_id: str,
         text: str,
-        llm_time_ms: Optional[float] = None,
-        tts_time_ms: Optional[float] = None,
         ttfa_ms: Optional[float] = None,
         total_time_ms: Optional[float] = None,
         was_interrupted: bool = False
     ):
-        """Log an NPC's response.
+        """Log an NPC's response to a player.
         
         Args:
             character_id: The character ID
             text: The response text
-            llm_time_ms: LLM generation time in milliseconds
-            tts_time_ms: TTS synthesis time in milliseconds
-            ttfa_ms: Time To First Audio in milliseconds (critical latency metric)
-            total_time_ms: Total time from input to response sent
+            ttfa_ms: Time To First Audio in ms (from user turn end to first audio chunk ready)
+                     This is THE key latency metric - what the user perceives as response time.
+            total_time_ms: Total response time in ms (from user turn end to response complete)
             was_interrupted: Whether the response was interrupted by the player
         """
         if not self.enabled or not self.log_npc_responses:
@@ -222,8 +219,6 @@ class ConversationLogger:
         }
         
         if self.log_processing_times:
-            data["llm_time_ms"] = llm_time_ms
-            data["tts_time_ms"] = tts_time_ms
             data["ttfa_ms"] = ttfa_ms
             data["total_time_ms"] = total_time_ms
             
@@ -306,9 +301,19 @@ class ConversationLogger:
         self,
         participants: List[str],
         context: Optional[str] = None,
-        total_turns: int = 0
+        total_turns: int = 0,
+        trigger_id: Optional[str] = None,
+        trigger_category: Optional[str] = None
     ):
-        """Log the start of an NPC-to-NPC conversation."""
+        """Log the start of an NPC-to-NPC conversation.
+        
+        Args:
+            participants: List of NPC IDs in the conversation
+            context: The conversation prompt/context
+            total_turns: Number of turns planned
+            trigger_id: Which trigger started this conversation (if auto-triggered)
+            trigger_category: Category of trigger ("location", "fallback", or None if manual)
+        """
         if not self.enabled or not self.log_npc_conversations:
             return
             
@@ -318,7 +323,9 @@ class ConversationLogger:
             data={
                 "participants": participants,
                 "context": context,
-                "total_turns": total_turns
+                "total_turns": total_turns,
+                "trigger_id": trigger_id,
+                "trigger_category": trigger_category
             }
         ))
     

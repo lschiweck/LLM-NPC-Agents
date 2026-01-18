@@ -1,0 +1,146 @@
+{
+  "version": "1.0",
+  "description": "NPC-to-NPC conversation injection prompts based on player context/location",
+  
+  "timing": {
+    "baseIntervalSeconds": 20,
+    "randomOffsetMaxSeconds": 20,
+    "minTurns": 2,
+    "maxTurns": 4,
+    "engagementBufferSeconds": 5,
+    "description": "Timer starts AFTER NPCs finish talking. 20-40s between conversations."
+  },
+
+  "injections": {
+    "sudoku": {
+      "id": "sudoku",
+      "displayName": "Living Room Sudoku",
+      "description": "Triggered when player is near the Sudoku puzzle in the living room",
+      "prompts": [
+        {
+          "id": "sudoku_patience",
+          "prompt": "Start a brief exchange about staying patient and looking for patterns in the Sudoku, explicitly anchored to the most recent relevant conversational cue (paraphrase only), without giving any actionable steps or numbers."
+        },
+        {
+          "id": "sudoku_no_rush",
+          "prompt": "Start a brief exchange about not rushing the Sudoku and avoiding forcing progress when nothing is clear, explicitly tied to the current tone in the last few turns (e.g., confidence vs hesitation), without giving any solving advice."
+        },
+        {
+          "id": "sudoku_stress",
+          "prompt": "Start a brief exchange about how stress affects focus on puzzles, grounded in the pacing or tension that just occurred in the conversation, keeping it general and not addressing the player directly."
+        },
+        {
+          "id": "sudoku_overread",
+          "prompt": "Start a brief exchange about how people sometimes over-read meaning into small puzzle details, explicitly responding to the most recent strong wording or assumption that appeared in the conversation (paraphrase only), without giving any solving guidance."
+        }
+      ]
+    },
+
+    "kitchen_safe": {
+      "id": "kitchen_safe",
+      "displayName": "Kitchen Safe",
+      "description": "Triggered when player is in the kitchen - NPCs discuss the safe even if player hasn't discovered it yet",
+      "prompts": [
+        {
+          "id": "safe_unusual",
+          "prompt": "Start a brief exchange about a safe in a kitchen feeling unusual, explicitly anchored to the most recent conversational cue (paraphrase only), without guessing what is inside or why it is there."
+        },
+        {
+          "id": "safe_normal_vs_odd",
+          "prompt": "Start a brief exchange where one agent frames a kitchen safe as normal and the other frames it as odd, and have each framing mirror the other agent's most recent style (cautious vs definitive) from the last few turns, keeping it mild and non-accusatory."
+        },
+        {
+          "id": "safe_no_assume",
+          "prompt": "Start a brief exchange reminding each other not to assume meaning from the safe until it is opened, explicitly responding to the most recent assumption or strong implication made in the conversation (paraphrase only), without giving procedural instructions."
+        },
+        {
+          "id": "safe_distraction",
+          "prompt": "Start a brief exchange about how unusual objects can pull attention away from the bigger picture, explicitly tied to whatever the conversation was focused on (paraphrase only), without introducing new facts."
+        }
+      ]
+    },
+
+    "continuity": {
+      "id": "continuity",
+      "displayName": "Conversation Continuity and Drift",
+      "description": "Triggered when player moves away or stops engaging - NPCs continue their conversation naturally",
+      "prompts": [
+        {
+          "id": "continue_topic",
+          "prompt": "Continue your current topic for one short back-and-forth when there is no new input, explicitly referencing the last unresolved point that was just raised (paraphrase only), then stop naturally."
+        },
+        {
+          "id": "interrupted_shift",
+          "prompt": "If the conversation is interrupted by a sudden topic shift, briefly reference what the shift cut off (paraphrase only) and finish with a neutral 'we'll leave it there' kind of tone, without asking questions."
+        },
+        {
+          "id": "resume_earlier",
+          "prompt": "Resume an earlier topic as if it was ongoing when it gets brought up again later, picking up from the last unresolved point (paraphrase only), without greeting or asking a question."
+        },
+        {
+          "id": "loop_acknowledge",
+          "prompt": "If the conversation starts looping or repeating itself, start a brief exchange acknowledging the repetition in a neutral way, anchored to the last repeated phrasing/idea (paraphrase only), without escalating or adding new information."
+        },
+        {
+          "id": "lull_checkin",
+          "prompt": "If there is a lull or silence, have one short check-in with each other about staying calm and thinking clearly, tied to the quiet moment that just happened, without mentioning the player."
+        }
+      ]
+    },
+
+    "self_directed": {
+      "id": "self_directed",
+      "displayName": "Self-Directed Remarks",
+      "description": "Single NPC making a remark to themselves (monologue)",
+      "isMonologue": true,
+      "prompts": [
+        {
+          "id": "self_composed",
+          "prompt": "Mutter to yourself something like 'Stay calm... just stay calm.' or 'Keep it together.' - a short self-reassurance about staying composed."
+        },
+        {
+          "id": "self_uncertainty",
+          "prompt": "Mutter to yourself something like 'I don't know what to think anymore...' or 'Nothing makes sense.' - expressing doubt and uncertainty."
+        },
+        {
+          "id": "self_tension",
+          "prompt": "Mutter to yourself something like 'This tension is unbearable...' or 'Why does everything feel so heavy?' - commenting on the tense atmosphere."
+        },
+        {
+          "id": "self_careful",
+          "prompt": "Mutter to yourself something like 'I should watch what I say...' or 'Careful now...' - reminding yourself to be cautious with words."
+        }
+      ]
+    }
+  },
+
+  "triggers": {
+    "description": "Maps game state conditions to injection categories",
+    "mappings": [
+      {
+        "condition": "player_at_sudoku",
+        "injectionCategory": "sudoku",
+        "priority": 1,
+        "cooldownSeconds": 45
+      },
+      {
+        "condition": "player_in_kitchen",
+        "injectionCategory": "kitchen_safe",
+        "priority": 1,
+        "cooldownSeconds": 45
+      },
+      {
+        "condition": "player_away_from_npcs",
+        "injectionCategory": "continuity",
+        "priority": 0,
+        "cooldownSeconds": 30
+      },
+      {
+        "condition": "conversation_lull",
+        "injectionCategory": "self_directed",
+        "priority": 0,
+        "cooldownSeconds": 40
+      }
+    ]
+  }
+}

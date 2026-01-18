@@ -3,6 +3,7 @@ from typing import Optional, Callable, List, Dict
 import threading
 import logging
 import time
+import re
 from queue import Queue, Empty
 import sys
 
@@ -407,6 +408,69 @@ class SpeechPipelineManager:
         """
         return chunk.replace("—", "-").replace("“", '"').replace("”", '"').replace("‘", "'").replace("’", "'").replace("…", "...")
 
+    def _sanitize_spoken_text(self, text: str) -> str:
+        """
+        Final safety net: strip meta / director-note leakage from model output.
+        This runs on the accumulated text (not token-level) before sending to clients and before TTS.
+        """
+        t = (text or "").strip()
+        if not t:
+            return ""
+
+        # Drop bracket/parenthetical meta prefixes repeatedly.
+        for _ in range(3):
+            new_t = re.sub(r"^\s*[\[\(]\s*[^]\)]{1,160}\s*[\]\)]\s*", "", t)
+            if new_t == t:
+                break
+            t = new_t.strip()
+
+        # Remove lines that are clearly "director"/instructional/meta chatter.
+        bad_line_patterns = [
+            r"^\s*🎬\s*DIRECTOR\b.*$",
+            r"^\s*DIRECTOR\s+REMINDER\b.*$",
+            r"^\s*\[?\s*DIRECTOR'?S\s+NOTE\]?\s*.*$",
+            r"^\s*WAIT,\s*WHAT\s+WAS\s+THAT\s+REMINDER\s+AGAIN\??.*$",
+            r"^\s*SORRY,\s*I\s+THINK\s+THERE\s+WAS\s+A\s+MISCOMMUNICATION.*$",
+            r"^\s*SO,\s*TO\s+CLARIFY,\s*YOU\s+WANT\s+ME\s+TO\s+.*$",
+        ]
+
+        lines = [ln.strip() for ln in t.splitlines() if ln and ln.strip()]
+        kept: List[str] = []
+        for ln in lines:
+            # Remove "shouted" instruction lines (all-caps) which commonly happen with injected notes.
+            letters = [c for c in ln if c.isalpha()]
+            if letters:
+                upper_ratio = sum(1 for c in letters if c.isupper()) / max(1, len(letters))
+                if upper_ratio >= 0.85 and len(ln) <= 120:
+                    continue
+
+            if any(re.match(pat, ln, flags=re.IGNORECASE) for pat in bad_line_patterns):
+                continue
+
+            kept.append(ln)
+
+        t = " ".join(kept).strip() if kept else ""
+        t = re.sub(r"\s+", " ", t).strip()
+        return t
+
+    def _sanitize_tts_chunk(self, chunk: str) -> str:
+        """
+        Chunk-level sanitizer for streaming final TTS.
+        Conservative: only drops obvious meta/instruction leakage.
+        """
+        c = (chunk or "")
+        if not c.strip():
+            return ""
+        if re.search(r"\bDIRECTOR\b|\bREMINDER\b|\bMISCOMMUNICATION\b", c, flags=re.IGNORECASE):
+            return ""
+        # Drop all-caps "instruction-like" fragments.
+        letters = [ch for ch in c if ch.isalpha()]
+        if letters:
+            upper_ratio = sum(1 for ch in letters if ch.isupper()) / max(1, len(letters))
+            if upper_ratio >= 0.9 and len(c.strip()) <= 120:
+                return ""
+        return c
+
     def clean_quick_answer(self, text: str) -> str:
         """
         Removes specific leading patterns (like '<think>', newlines, spaces) from text.
@@ -509,7 +573,7 @@ class SpeechPipelineManager:
                         context, overhang = self.text_context.get_context(current_gen.quick_answer)
                         if context:
                             logger.info(f"🗣️🧠✔️ [Gen {gen_id}] LLM Worker:  {Colors.apply('QUICK ANSWER FOUND:').magenta} {context}, overhang: {overhang}")
-                            current_gen.quick_answer = context
+                            current_gen.quick_answer = self._sanitize_spoken_text(context)
                             if self.on_partial_assistant_text:
                                 self.on_partial_assistant_text(current_gen.quick_answer)
                             current_gen.quick_answer_overhang = overhang
@@ -527,6 +591,7 @@ class SpeechPipelineManager:
                 if not current_gen.llm_aborted and not current_gen.quick_answer_provided:
                     logger.info(f"🗣️🧠✔️ [Gen {gen_id}] LLM Worker: No context boundary found, using full response as quick answer.")
                     # quick_answer already contains the full text
+                    current_gen.quick_answer = self._sanitize_spoken_text(current_gen.quick_answer)
                     current_gen.quick_answer_provided = True # Mark as provided
                     if self.on_partial_assistant_text:
                         self.on_partial_assistant_text(current_gen.quick_answer)
@@ -719,7 +784,13 @@ class SpeechPipelineManager:
                      logger.info(f"🗣️👄❌ [Gen {gen_id}] Quick TTS Worker: Aborting TTS synthesis due to stop request or abortion flag.")
                      current_gen.audio_quick_aborted = True
                 else:
-                    logger.info(f"🗣️👄🎶 [Gen {gen_id}] Quick TTS Worker: Synthesizing: '{current_gen.quick_answer[:50]}...'")
+                    # Final safety net before speaking
+                    current_gen.quick_answer = self._sanitize_spoken_text(current_gen.quick_answer)
+                    if not current_gen.quick_answer:
+                        logger.warning(f"🗣️👄⚠️ [Gen {gen_id}] Quick TTS Worker: Sanitized quick answer is empty; skipping synthesis.")
+                        current_gen.audio_quick_aborted = True
+                    else:
+                        logger.info(f"🗣️👄🎶 [Gen {gen_id}] Quick TTS Worker: Synthesizing: '{current_gen.quick_answer[:50]}...'")
                     completed = self.audio.synthesize(
                         current_gen.quick_answer,
                         current_gen.audio_chunks,
@@ -803,15 +874,18 @@ class SpeechPipelineManager:
                 # Yield overhang first
                 if current_gen.quick_answer_overhang:
                     preprocessed_overhang = self.preprocess_chunk(current_gen.quick_answer_overhang)
+                    preprocessed_overhang = self._sanitize_tts_chunk(preprocessed_overhang)
                     logger.debug(f"🗣️👄< [Gen {gen_id}] Final TTS Gen: Yielding overhang: '{preprocessed_overhang[:50]}...'")
-                    current_gen.final_answer += preprocessed_overhang # Add preprocessed version
+                    if preprocessed_overhang:
+                        current_gen.final_answer += preprocessed_overhang # Add preprocessed version
                     if self.on_partial_assistant_text:
                          logger.debug(f"🗣️👄< [Gen {gen_id}] Final TTS Worker on_partial_assistant_text: Sending overhang.")
                          try:
-                            self.on_partial_assistant_text(current_gen.quick_answer + current_gen.final_answer)
+                            self.on_partial_assistant_text(self._sanitize_spoken_text(current_gen.quick_answer + current_gen.final_answer))
                          except Exception as cb_e:
                              logger.warning(f"🗣️💥 Callback error in on_partial_assistant_text (overhang): {cb_e}")
-                    yield preprocessed_overhang
+                    if preprocessed_overhang:
+                        yield preprocessed_overhang
 
                 # Yield remaining chunks from LLM generator
                 logger.debug(f"🗣️👄< [Gen {gen_id}] Final TTS Gen: Yielding remaining LLM chunks...")
@@ -824,15 +898,18 @@ class SpeechPipelineManager:
                              break # Stop yielding
 
                          preprocessed_chunk = self.preprocess_chunk(chunk)
-                         current_gen.final_answer += preprocessed_chunk
+                         preprocessed_chunk = self._sanitize_tts_chunk(preprocessed_chunk)
+                         if preprocessed_chunk:
+                             current_gen.final_answer += preprocessed_chunk
                          if self.on_partial_assistant_text:
                              # logger.debug(f"🗣️👄< [Gen {gen_id}] Final TTS Worker on_partial_assistant_text: Sending final chunk: {preprocessed_chunk[:30]}")
                             try:
-                                 self.on_partial_assistant_text(current_gen.quick_answer + current_gen.final_answer)
+                                 self.on_partial_assistant_text(self._sanitize_spoken_text(current_gen.quick_answer + current_gen.final_answer))
                             except Exception as cb_e:
                                  logger.warning(f"🗣️💥 Callback error in on_partial_assistant_text (final chunk): {cb_e}")
 
-                         yield preprocessed_chunk
+                         if preprocessed_chunk:
+                             yield preprocessed_chunk
                     logger.debug(f"🗣️👄< [Gen {gen_id}] Final TTS Gen: Finished iterating LLM chunks.")
                 except Exception as gen_e:
                      logger.exception(f"🗣️👄💥 [Gen {gen_id}] Final TTS Gen: Error iterating LLM generator: {gen_e}")
@@ -1187,13 +1264,10 @@ class SpeechPipelineManager:
 
     def _build_combined_history(self) -> List[dict]:
         """
-        Build combined history including NPC-to-NPC conversations and director notes.
+        Build combined history including NPC-to-NPC conversations.
         
         The player witnesses NPC-to-NPC conversations in the game, so this character
         should remember what they discussed with other NPCs when talking to the player.
-        
-        Director notes are ALSO injected into history (not just system prompt) for
-        better LLM compliance - models pay more attention to recent conversation context.
         
         Returns:
             Combined history list for LLM context.
@@ -1232,15 +1306,11 @@ class SpeechPipelineManager:
             })
 
         combined.extend(self.history)
-        
-        # IMPORTANT: Add director notes as a final "reminder" right before the user's new message
-        # This puts them in the LLM's immediate attention window for better compliance
-        if self._director_notes:
-            notes_reminder = "🎬 DIRECTOR REMINDER (act on this NOW): " + " | ".join([
-                n.strip() for n in self._director_notes if n and n.strip()
-            ])
-            combined.append({"role": "user", "content": notes_reminder})
-            combined.append({"role": "assistant", "content": "Understood, I will do this."})
+        # IMPORTANT:
+        # Do NOT inject director notes into the conversation history.
+        # They already live at the TOP of the system prompt (high salience), and putting them
+        # into history as "user" content causes the model to quote them out loud ("BE CAREFUL...")
+        # or to discuss "the reminder", which breaks immersion.
         
         return combined
 

@@ -42,6 +42,9 @@ class NPCConversationConfig:
     npc2_id: Optional[str]  # None for monologue
     total_turns: int
     context: str = ""
+    # Trigger info for logging (which trigger caused this conversation)
+    trigger_id: Optional[str] = None  # e.g., "sudoku_puzzle", "continuity_resume", "self_directed"
+    trigger_category: Optional[str] = None  # "location", "fallback", or None if manual
     
     @property
     def is_monologue(self) -> bool:
@@ -183,7 +186,9 @@ class NPCConversationOrchestrator:
             conv_logger.log_npc_conversation_start(
                 participants=participants,
                 context=config.context,
-                total_turns=config.total_turns
+                total_turns=config.total_turns,
+                trigger_id=config.trigger_id,
+                trigger_category=config.trigger_category
             )
         
         # Start conversation loop in background
@@ -373,33 +378,44 @@ class NPCConversationOrchestrator:
             """
             parts: List[str] = []
 
-            # Hard constraints (we also enforce again via post-processing)
-            parts.append(
-                "IMPORTANT RULES (DO NOT SAY THESE OUT LOUD): "
-                "Reply as ONE speaker only. Output ONLY what YOU say. "
-                "Do NOT write the other person's dialogue. "
-                "Do NOT include any name prefixes like 'Lisa:' or 'Paul:'. "
-                "Keep it to 1–2 short sentences."
-            )
+            # Check if this is a monologue (self-directed remark)
+            is_monologue = listener_id is None or listener_id == ""
 
-            if listener_id:
-                parts.append(f"You are {speaker_id}. You are talking to {listener_id}.")
-            else:
+            if is_monologue:
+                # Monologue: character muttering to themselves
+                # Keep the format similar to dialogue prompts for consistency
+                parts.append(
+                    "IMPORTANT RULES: Output ONLY what YOU say out loud. "
+                    "One short sentence. No name prefixes. No stage directions. "
+                    "You are muttering to yourself."
+                )
                 parts.append(f"You are {speaker_id}.")
-
-            if is_first_turn and context:
-                if listener_id:
-                    parts.append(f"Start the conversation about: {context}")
+                if context:
+                    # Make context into a direct instruction
+                    parts.append(f"{context}")
                 else:
-                    parts.append(f"Make a short statement about: {context}")
+                    # Default fallback if no context
+                    parts.append("Mutter something to yourself about the situation.")
+            else:
+                # Dialogue: two NPCs talking
+                parts.append(
+                    "IMPORTANT RULES (DO NOT SAY THESE OUT LOUD): "
+                    "Reply as ONE speaker only. Output ONLY what YOU say. "
+                    "Do NOT write the other person's dialogue. "
+                    "Do NOT include any name prefixes like 'Lisa:' or 'Paul:'. "
+                    "Keep it to 1–2 short sentences."
+                )
+                parts.append(f"You are {speaker_id}. You are talking to {listener_id}.")
 
-            if not is_first_turn and listener_id and self.state.conversation_history:
-                last_turn = self.state.conversation_history[-1]
-                # Avoid speaker labels in the prompt to prevent scripted output
-                parts.append(f'They just said: "{last_turn.message}"')
+                if is_first_turn and context:
+                    parts.append(f"Start the conversation about: {context}")
 
-            if is_last_turn:
-                parts.append("Wrap it up naturally in one short sentence.")
+                if not is_first_turn and self.state.conversation_history:
+                    last_turn = self.state.conversation_history[-1]
+                    parts.append(f'They just said: "{last_turn.message}"')
+
+                if is_last_turn:
+                    parts.append("Wrap it up naturally in one short sentence.")
 
             return " ".join([p.strip() for p in parts if p and p.strip()])
         
@@ -564,17 +580,23 @@ class NPCConversationOrchestrator:
             # Keep NPC-to-NPC turns short and snappy.
             # Ollama supports num_predict; OpenAI/LMStudio will ignore unknown options safely.
             full_response = ""
+            
+            # Build stop sequences - don't include empty strings
+            # For monologues, don't use \n as stop since short responses get cut off
+            is_monologue = not listener_id
+            if is_monologue:
+                stop_sequences = [f"{speaker_id}:"]  # Only stop at speaker label
+            else:
+                stop_sequences = ["\n", f"{speaker_id}:"]
+                stop_sequences.append(f"{listener_id}:")
+            
             for chunk in pipeline.llm.generate(
                 text=prompt,
                 history=history,
                 use_system_prompt=True,
-                num_predict=90,
-                temperature=0.6,
-                stop=[
-                    "\n",
-                    f"{speaker_id}:",
-                    f"{listener_id}:" if listener_id else "",
-                ],
+                num_predict=90 if not is_monologue else 50,  # Shorter for monologues
+                temperature=0.8 if is_monologue else 0.7,  # Higher temp for monologues
+                stop=stop_sequences,
             ):
                 # Check for interruption during generation
                 if self._stop_requested:
@@ -587,9 +609,19 @@ class NPCConversationOrchestrator:
             # Clean + hard-enforce single-speaker short output.
             cleaned = _sanitize_single_speaker(full_response)
             cleaned = _truncate_sentences(cleaned, max_sentences=2)
+            
+            # Validate the response is not empty or just punctuation
+            cleaned = cleaned.strip()
+            if not cleaned or cleaned in ["...", "..", ".", "?", "!", ""]:
+                logger.warning(f"🎭 Empty or invalid response from {speaker_id}, using fallback")
+                # Provide a simple fallback for monologues
+                if not listener_id:
+                    cleaned = "Hmm... I need to think about this."
+                else:
+                    cleaned = "I... I'm not sure what to say."
 
             logger.info(f"🎭 Cleaned response for {speaker_id}: {cleaned[:120]}...")
-            return cleaned.strip()
+            return cleaned
             
         except Exception as e:
             logger.error(f"🎭 LLM generation error for {speaker_id}: {e}", exc_info=True)

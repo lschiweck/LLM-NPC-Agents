@@ -169,10 +169,20 @@ public class LiveLlmManager : MonoBehaviour
     {
         if (listeners.Count == 0) return;
 
+        // Check if audio has significant volume (basic VAD)
+        float maxAmp = 0f;
         for (int i = 0; i < chunkSamples; i++)
         {
             float sample = Mathf.Clamp(floatChunk[i], -1f, 1f);
             pcmBuffer[i] = (short)(sample < 0f ? sample * 32768f : sample * 32767f);
+            if (Mathf.Abs(sample) > maxAmp) maxAmp = Mathf.Abs(sample);
+        }
+
+        // Notify injection system that player is speaking (if audio is above threshold)
+        // This suppresses NPC-to-NPC conversations while player is actively talking
+        if (maxAmp > 0.02f) // Threshold to filter out noise
+        {
+            NpcInjectionTriggerSystem.Instance?.OnPlayerSpeaking();
         }
 
         uint timestamp = (uint)(DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() & 0xFFFFFFFF);

@@ -765,6 +765,234 @@
       color: #4ade80;
     }
     
+    /* ============================================
+       NPC Injection Trigger System Panel
+       ============================================ */
+    .inject-trigger-panel {
+      width: 340px;
+      background: linear-gradient(180deg, #1a2332 0%, #0f1722 100%);
+      border-radius: 16px;
+      margin: 24px 0 24px 16px;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+      box-shadow: 0 4px 20px rgba(0,0,0,0.4);
+      border: 1px solid rgba(79, 209, 197, 0.2);
+    }
+    .inject-trigger-header {
+      background: linear-gradient(135deg, #0d4f4a 0%, #1a2332 100%);
+      padding: 14px 18px;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      border-bottom: 1px solid rgba(79, 209, 197, 0.3);
+    }
+    .inject-trigger-icon { font-size: 1.3rem; }
+    .inject-trigger-title {
+      color: #4fd1c5;
+      font-weight: 600;
+      font-size: 0.95rem;
+      letter-spacing: 0.5px;
+    }
+    .inject-trigger-content {
+      flex: 1;
+      padding: 14px;
+      overflow-y: auto;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+    
+    /* Trigger Category Card */
+    .trigger-category {
+      background: rgba(255,255,255,0.03);
+      border: 1px solid rgba(79, 209, 197, 0.15);
+      border-radius: 10px;
+      padding: 12px;
+      transition: all 0.2s;
+    }
+    .trigger-category.active {
+      background: rgba(79, 209, 197, 0.1);
+      border-color: rgba(79, 209, 197, 0.4);
+    }
+    .trigger-category-header {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      margin-bottom: 8px;
+    }
+    .trigger-category-icon { font-size: 1.1rem; }
+    .trigger-category-name {
+      color: #e0e0e0;
+      font-weight: 500;
+      font-size: 0.9rem;
+      flex: 1;
+    }
+    .trigger-category-badge {
+      font-size: 0.7rem;
+      padding: 2px 8px;
+      border-radius: 10px;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+    .trigger-category-badge.inactive {
+      background: rgba(100, 100, 100, 0.3);
+      color: #888;
+    }
+    .trigger-category-badge.active {
+      background: rgba(79, 209, 197, 0.3);
+      color: #4fd1c5;
+      animation: pulse 1.5s infinite;
+    }
+    .trigger-category-desc {
+      color: #666;
+      font-size: 0.75rem;
+      margin-bottom: 10px;
+      line-height: 1.4;
+    }
+    .trigger-category-actions {
+      display: flex;
+      gap: 8px;
+    }
+    .trigger-toggle-btn {
+      flex: 1;
+      padding: 8px 12px;
+      border: none;
+      border-radius: 6px;
+      font-size: 0.8rem;
+      font-weight: 500;
+      cursor: pointer;
+      transition: all 0.2s;
+    }
+    .trigger-toggle-btn.activate {
+      background: rgba(79, 209, 197, 0.2);
+      color: #4fd1c5;
+      border: 1px solid rgba(79, 209, 197, 0.3);
+    }
+    .trigger-toggle-btn.activate:hover {
+      background: rgba(79, 209, 197, 0.3);
+    }
+    .trigger-toggle-btn.deactivate {
+      background: rgba(239, 68, 68, 0.2);
+      color: #f87171;
+      border: 1px solid rgba(239, 68, 68, 0.3);
+    }
+    .trigger-toggle-btn.deactivate:hover {
+      background: rgba(239, 68, 68, 0.3);
+    }
+    .trigger-inject-btn {
+      padding: 8px 14px;
+      background: linear-gradient(135deg, #8b5cf6, #6366f1);
+      color: #fff;
+      border: none;
+      border-radius: 6px;
+      font-size: 0.8rem;
+      font-weight: 500;
+      cursor: pointer;
+      transition: all 0.2s;
+    }
+    .trigger-inject-btn:hover {
+      opacity: 0.9;
+      transform: translateY(-1px);
+    }
+    .trigger-inject-btn:active {
+      transform: translateY(0);
+    }
+    
+    /* Player Engagement Section */
+    .engagement-section {
+      background: rgba(251, 191, 36, 0.1);
+      border: 1px solid rgba(251, 191, 36, 0.25);
+      border-radius: 10px;
+      padding: 12px;
+    }
+    .engagement-header {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin-bottom: 8px;
+    }
+    .engagement-title {
+      color: #fbbf24;
+      font-weight: 500;
+      font-size: 0.85rem;
+    }
+    .engagement-status {
+      margin-left: auto;
+      font-size: 0.75rem;
+      padding: 3px 10px;
+      border-radius: 10px;
+    }
+    .engagement-status.suppressed {
+      background: rgba(239, 68, 68, 0.3);
+      color: #f87171;
+    }
+    .engagement-status.allowed {
+      background: rgba(74, 222, 128, 0.3);
+      color: #4ade80;
+    }
+    .engagement-controls {
+      display: flex;
+      gap: 8px;
+    }
+    .engagement-btn {
+      flex: 1;
+      padding: 8px 12px;
+      border-radius: 6px;
+      font-size: 0.8rem;
+      font-weight: 500;
+      cursor: pointer;
+      transition: all 0.2s;
+    }
+    .engagement-btn.in-zone {
+      background: rgba(251, 191, 36, 0.2);
+      color: #fbbf24;
+      border: 1px solid rgba(251, 191, 36, 0.3);
+    }
+    .engagement-btn.speaking {
+      background: rgba(239, 68, 68, 0.2);
+      color: #f87171;
+      border: 1px solid rgba(239, 68, 68, 0.3);
+    }
+    .engagement-btn.active {
+      background: rgba(79, 209, 197, 0.3) !important;
+      border-color: #4fd1c5 !important;
+    }
+    
+    /* Timing Section */
+    .timing-section {
+      background: rgba(99, 102, 241, 0.1);
+      border: 1px solid rgba(99, 102, 241, 0.25);
+      border-radius: 10px;
+      padding: 12px;
+    }
+    .timing-row {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      margin-bottom: 8px;
+    }
+    .timing-row:last-child { margin-bottom: 0; }
+    .timing-label {
+      color: #888;
+      font-size: 0.75rem;
+      min-width: 80px;
+    }
+    .timing-input {
+      flex: 1;
+      background: rgba(0,0,0,0.3);
+      border: 1px solid rgba(99, 102, 241, 0.3);
+      border-radius: 6px;
+      padding: 6px 10px;
+      color: #fff;
+      font-size: 0.85rem;
+    }
+    .timing-unit {
+      color: #666;
+      font-size: 0.75rem;
+      min-width: 20px;
+    }
+    
     /* Responsive: Stack panels on small screens */
     @media (max-width: 1400px) {
       .npc-conv-panel {
@@ -773,21 +1001,25 @@
       .gm-panel {
         width: 280px;
       }
+      .inject-trigger-panel {
+        width: 300px;
+      }
     }
     @media (max-width: 1100px) {
       #app {
         flex-direction: column;
         align-items: center;
       }
-      .gm-panel, .npc-conv-panel {
+      .gm-panel, .npc-conv-panel, .inject-trigger-panel {
         width: 100%;
         max-width: 480px;
         margin: 12px 0;
         max-height: none;
       }
+      .inject-trigger-panel { order: 1; }
       .npc-conv-panel { order: 2; }
-      .chat-container { order: 1; }
-      .gm-panel { order: 3; }
+      .chat-container { order: 3; }
+      .gm-panel { order: 4; }
     }
     
     /* ============================================
@@ -933,6 +1165,141 @@
   </div>
 
   <div id="app">
+    <!-- NPC Injection Trigger System Panel -->
+    <div class="inject-trigger-panel" id="injectTriggerPanel">
+      <div class="inject-trigger-header">
+        <span class="inject-trigger-icon">🎯</span>
+        <span class="inject-trigger-title">NPC Injection Triggers</span>
+      </div>
+      
+      <div class="inject-trigger-content">
+        <!-- Auto Injection Control -->
+        <div class="engagement-section" style="background: rgba(74, 222, 128, 0.1); border-color: rgba(74, 222, 128, 0.25);">
+          <div class="engagement-header">
+            <span>⚙️</span>
+            <span class="engagement-title" style="color: #4ade80;">Auto Injection</span>
+            <button class="engagement-btn" id="btnAutoInjection" style="background: rgba(74, 222, 128, 0.3); color: #4ade80; border: 1px solid rgba(74, 222, 128, 0.4); margin-left: auto; padding: 4px 12px;">
+              🟢 Start Auto
+            </button>
+          </div>
+          <div style="color: #666; font-size: 0.75rem; margin-top: 6px;">
+            Automatically fires injections when triggers are active
+          </div>
+        </div>
+        
+        <!-- Debug Log & Timer -->
+        <div class="engagement-section" style="background: rgba(100, 100, 100, 0.15); border-color: rgba(100, 100, 100, 0.3);">
+          <div class="engagement-header">
+            <span>🔍</span>
+            <span class="engagement-title">Debug</span>
+            <span id="injectionTimer" style="margin-left: auto; font-size: 11px; color: #888;">⏱️ --</span>
+          </div>
+          <div id="injectionDebugLog" style="font-size: 10px; max-height: 60px; overflow-y: auto; background: rgba(0,0,0,0.4); padding: 6px; border-radius: 4px; font-family: monospace; margin-top: 6px; color: #aaa;">
+            Waiting...
+          </div>
+        </div>
+        
+        <!-- Player Engagement (suppresses injections) -->
+        <div class="engagement-section">
+          <div class="engagement-header">
+            <span>🎮</span>
+            <span class="engagement-title">Engagement</span>
+            <span class="engagement-status allowed" id="engagementStatus">● Can inject</span>
+          </div>
+          <div style="font-size: 10px; color: #666; margin-bottom: 8px;">
+            Speaking auto-detected from server. Zone is manual toggle.
+          </div>
+          <div class="engagement-controls">
+            <button class="engagement-btn" id="btnInNpcZone" title="Manual toggle: simulate player being near NPCs">
+              In NPC Zone
+            </button>
+          </div>
+        </div>
+        
+        <!-- LOCATION-BASED TRIGGERS (require player position) -->
+        <div style="font-size: 10px; color: #888; margin-bottom: 6px; text-transform: uppercase; letter-spacing: 1px;">📍 Location-Based</div>
+        
+        <!-- Sudoku Trigger -->
+        <div class="trigger-category" id="triggerSudoku">
+          <div class="trigger-category-header">
+            <span class="trigger-category-icon">🧩</span>
+            <span class="trigger-category-name">Sudoku Table</span>
+            <span class="trigger-category-badge inactive" id="badgeSudoku">inactive</span>
+          </div>
+          <div class="trigger-category-desc">🎯 Requires: Player at Sudoku table</div>
+          <div class="trigger-category-actions">
+            <button class="trigger-toggle-btn activate" id="btnSudokuToggle" data-trigger="player_at_sudoku">
+              Activate
+            </button>
+            <button class="trigger-inject-btn" data-category="sudoku">⚡ Inject Now</button>
+          </div>
+        </div>
+        
+        <!-- Kitchen Safe Trigger -->
+        <div class="trigger-category" id="triggerKitchen">
+          <div class="trigger-category-header">
+            <span class="trigger-category-icon">🔐</span>
+            <span class="trigger-category-name">Kitchen Safe</span>
+            <span class="trigger-category-badge inactive" id="badgeKitchen">inactive</span>
+          </div>
+          <div class="trigger-category-desc">🎯 Requires: Player in kitchen</div>
+          <div class="trigger-category-actions">
+            <button class="trigger-toggle-btn activate" id="btnKitchenToggle" data-trigger="player_in_kitchen">
+              Activate
+            </button>
+            <button class="trigger-inject-btn" data-category="kitchen_safe">⚡ Inject Now</button>
+          </div>
+        </div>
+        
+        <!-- ALWAYS-ON FALLBACK TRIGGERS (used when no location trigger is active) -->
+        <div style="font-size: 10px; color: #4ade80; margin: 12px 0 6px 0; text-transform: uppercase; letter-spacing: 1px;">✓ Always On (fallback when no location active)</div>
+        
+        <!-- Continuity Trigger -->
+        <div class="trigger-category active" id="triggerContinuity" style="opacity: 0.8;">
+          <div class="trigger-category-header">
+            <span class="trigger-category-icon">💬</span>
+            <span class="trigger-category-name">Continuity / Drift</span>
+            <span class="trigger-category-badge active" id="badgeContinuity">always on</span>
+          </div>
+          <div class="trigger-category-desc">NPCs continue their conversation</div>
+          <div class="trigger-category-actions">
+            <button class="trigger-inject-btn" data-category="continuity">⚡ Inject Now</button>
+          </div>
+        </div>
+        
+        <!-- Self-Directed Trigger -->
+        <div class="trigger-category active" id="triggerSelfDirected" style="opacity: 0.8;">
+          <div class="trigger-category-header">
+            <span class="trigger-category-icon">🤔</span>
+            <span class="trigger-category-name">Self-Directed (Monologue)</span>
+            <span class="trigger-category-badge active" id="badgeSelfDirected">always on</span>
+          </div>
+          <div class="trigger-category-desc">Single NPC mutters to themselves</div>
+          <div class="trigger-category-actions">
+            <button class="trigger-inject-btn" data-category="self_directed">⚡ Inject Now</button>
+          </div>
+        </div>
+        
+        <!-- Timing Settings -->
+        <div class="timing-section">
+          <div class="timing-row">
+            <span class="timing-label">Base Interval</span>
+            <input type="number" class="timing-input" id="timingBaseInterval" value="20" min="5" max="120">
+            <span class="timing-unit">s</span>
+          </div>
+          <div class="timing-row">
+            <span class="timing-label">Random +</span>
+            <input type="number" class="timing-input" id="timingRandomOffset" value="15" min="0" max="60">
+            <span class="timing-unit">s</span>
+          </div>
+          <div class="timing-row">
+            <span class="timing-label">Turns</span>
+            <span style="color: #aaa; font-size: 12px;">2-4 (random), Monologue=1</span>
+          </div>
+        </div>
+      </div>
+    </div>
+    
     <!-- NPC Conversation Panel (Left Side) -->
     <div class="npc-conv-panel" id="npcConvPanel">
       <div class="npc-conv-header">
