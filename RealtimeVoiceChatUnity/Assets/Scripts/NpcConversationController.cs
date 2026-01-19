@@ -49,10 +49,10 @@ public class NpcConversationController : MonoBehaviour
     // Interruption handling
     private bool isInterrupted = false;
     private string currentPlayingSpeakerId = null;
-    private AudioSource currentPlayingAudioSource = null; // Direct reference for reliable stopping
-
-    // Dedicated AudioSources for NPC-to-NPC playback (do NOT reuse LiveLlmCharacterBase.ttsSource streaming)
-    private readonly System.Collections.Generic.Dictionary<string, AudioSource> npcConvSources = new();
+    
+    // Track conversation participants for look-at system
+    private string currentNpc1Id = null;
+    private string currentNpc2Id = null;
 
     [Serializable]
     private class ServerMessage
@@ -256,12 +256,13 @@ public class NpcConversationController : MonoBehaviour
                 var character = LiveLlmCharacterBase.GetCharacter(speakerId);
                 if (character != null)
                 {
-                    Debug.Log($"[NpcConversation] Playing audio for {speakerId} via dedicated NPC-conv AudioSource");
+                    // Route through character's main ttsSource via PlayExternalTtsChunk
+                    // This ensures OVR Lip Sync (which monitors ttsSource) works for NPC-NPC convos
+                    Debug.Log($"[NpcConversation] Playing audio for {speakerId} via PlayExternalTtsChunk (lip sync compatible)");
                     isPlayingAudio = true;
                     currentPlayingSpeakerId = speakerId;
-                    currentPlayingAudioSource = GetOrCreateNpcConvSource(speakerId, character);
 
-                    // Decode PCM16 (little endian) -> float samples
+                    // Decode to get duration for waiting
                     byte[] audioBytes = Convert.FromBase64String(base64Audio);
                     int sampleCount = audioBytes.Length / 2;
                     if (sampleCount <= 0)
@@ -269,46 +270,32 @@ public class NpcConversationController : MonoBehaviour
                         Debug.LogWarning($"[NpcConversation] Empty audio for {speakerId}");
                         isPlayingAudio = false;
                         currentPlayingSpeakerId = null;
-                        currentPlayingAudioSource = null;
                         continue;
                     }
 
-                    float[] samples = new float[sampleCount];
-                    for (int i = 0; i < sampleCount; i++)
+                    // Play through character's main audio path (triggers lip sync)
+                    character.PlayExternalTtsChunk(base64Audio);
+                    
+                    // Calculate duration and wait for playback to complete
+                    // PlayExternalTtsChunk upsamples 24kHz to 48kHz, so duration stays the same
+                    float durationSeconds = sampleCount / (float)NPC_SAMPLE_RATE;
+                    float waitTime = 0f;
+                    
+                    while (waitTime < durationSeconds && !isInterrupted)
                     {
-                        short s = BitConverter.ToInt16(audioBytes, i * 2);
-                        samples[i] = s / 32768f;
+                        yield return new WaitForSeconds(0.05f);
+                        waitTime += 0.05f;
                     }
-
-                    // Create clip at 24kHz and play via Play() so Stop() works instantly.
-                    var clip = AudioClip.Create($"NpcConv_{speakerId}_{Time.frameCount}", sampleCount, 1, NPC_SAMPLE_RATE, false);
-                    clip.SetData(samples, 0);
-
-                    currentPlayingAudioSource.Stop();
-                    currentPlayingAudioSource.clip = clip;
-                    currentPlayingAudioSource.Play();
-
-                    // Wait for completion by checking AudioSource.isPlaying (no "duration guessing")
-                    while (currentPlayingAudioSource != null && currentPlayingAudioSource.isPlaying && !isInterrupted)
-                    {
-                        yield return new WaitForSeconds(0.02f);
-                    }
-
-                    // Cleanup clip reference (do not destroy immediately if Unity is still using it)
-                    if (currentPlayingAudioSource != null)
-                    {
-                        currentPlayingAudioSource.clip = null;
-                    }
-                    Destroy(clip);
                     
                     if (isInterrupted)
                     {
                         Debug.Log($"[NpcConversation] Playback interrupted for {speakerId}");
+                        // Stop audio on the character
+                        character.StopAllAudioImmediately();
                     }
                     
                     isPlayingAudio = false;
                     currentPlayingSpeakerId = null;
-                    currentPlayingAudioSource = null;
                 }
                 else
                 {
@@ -326,6 +313,12 @@ public class NpcConversationController : MonoBehaviour
         {
             audioQueue.Clear();
             Debug.Log("[NpcConversation] Cleared remaining audio queue due to interruption.");
+            // Look targets already cleared in HandleInterruption
+        }
+        else
+        {
+            // Audio finished naturally - clear NPC look targets so they stop looking at each other
+            ClearNpcLookTargets();
         }
         
         audioPlaybackCoroutine = null;
@@ -343,11 +336,20 @@ public class NpcConversationController : MonoBehaviour
         {
             isConversationRunning = true;
             isInterrupted = false;  // Reset on new conversation
+            
+            // Make NPCs look at each other
+            SetNpcLookTargets();
+            
             OnConversationStarted?.Invoke();
         }
         else if (msg.state == "finished" || msg.state == "stopped" || msg.state == "stopping" || msg.state == "error")
         {
             isConversationRunning = false;
+            
+            // DON'T clear look targets here - audio may still be playing!
+            // Look targets are cleared when ProcessAudioQueue finishes (audio done)
+            // or when HandleInterruption is called (player interrupts)
+            
             OnConversationEnded?.Invoke();
         }
     }
@@ -378,64 +380,32 @@ public class NpcConversationController : MonoBehaviour
         audioQueue.Clear();
         Debug.Log("[NpcConversation] Cleared audio queue");
 
-        // Stop any currently playing NPC-conversation audio immediately (dedicated sources only)
-        if (currentPlayingAudioSource != null)
+        // Stop audio on the currently speaking character (now routed through ttsSource)
+        if (!string.IsNullOrEmpty(currentPlayingSpeakerId))
         {
-            currentPlayingAudioSource.Stop();
-            currentPlayingAudioSource.clip = null;
-        }
-        foreach (var kvp in npcConvSources)
-        {
-            if (kvp.Value != null)
+            var character = LiveLlmCharacterBase.GetCharacter(currentPlayingSpeakerId);
+            if (character != null)
             {
-                kvp.Value.Stop();
-                kvp.Value.clip = null;
+                character.StopAllAudioImmediately();
             }
         }
         
+        // Also stop all characters that might have buffered audio
+        foreach (var kvp in LiveLlmCharacterBase.AllCharacters)
+        {
+            kvp.Value?.StopAllAudioImmediately();
+        }
+        
+        // Clear look targets - NPCs stop looking at each other
+        ClearNpcLookTargets();
+        
         currentPlayingSpeakerId = null;
-        currentPlayingAudioSource = null;
         isPlayingAudio = false;
         isConversationRunning = false;
         OnConversationInterrupted?.Invoke();
         OnConversationEnded?.Invoke();
         
         Debug.Log("[NpcConversation] ✅ Interruption complete - all audio stopped");
-    }
-
-    private AudioSource GetOrCreateNpcConvSource(string speakerId, LiveLlmCharacterBase character)
-    {
-        if (npcConvSources.TryGetValue(speakerId, out var existing) && existing != null)
-        {
-            return existing;
-        }
-
-        // Create a separate AudioSource so we never touch the streaming ttsSource used for player↔NPC.
-        var src = character.gameObject.AddComponent<AudioSource>();
-        src.playOnAwake = false;
-        src.loop = false;
-
-        // Match spatial settings from the character’s main TTS source (if present)
-        if (character.ttsSource != null)
-        {
-            src.spatialBlend = character.ttsSource.spatialBlend;
-            src.rolloffMode = character.ttsSource.rolloffMode;
-            src.minDistance = character.ttsSource.minDistance;
-            src.maxDistance = character.ttsSource.maxDistance;
-            src.dopplerLevel = character.ttsSource.dopplerLevel;
-            src.volume = character.ttsSource.volume;
-        }
-        else
-        {
-            src.spatialBlend = 1f;
-            src.rolloffMode = AudioRolloffMode.Logarithmic;
-            src.minDistance = 1.5f;
-            src.maxDistance = 15f;
-            src.dopplerLevel = 0f;
-        }
-
-        npcConvSources[speakerId] = src;
-        return src;
     }
 
     /// <summary>
@@ -461,6 +431,10 @@ public class NpcConversationController : MonoBehaviour
         
         // Reset interruption flag when starting a new conversation
         isInterrupted = false;
+        
+        // Store participant IDs for look-at system
+        currentNpc1Id = npc1;
+        currentNpc2Id = npc2;
 
         var msg = new StartConversationMessage
         {
@@ -580,5 +554,57 @@ public class NpcConversationController : MonoBehaviour
             autoTriggerCoroutine = StartCoroutine(AutoTriggerLoop());
         }
     }
-}
 
+    #region Look At System
+    
+    /// <summary>
+    /// Make the conversation participants look at each other.
+    /// </summary>
+    private void SetNpcLookTargets()
+    {
+        if (string.IsNullOrEmpty(currentNpc1Id)) return;
+        
+        var npc1 = LiveLlmCharacterBase.GetCharacter(currentNpc1Id);
+        var npc2 = !string.IsNullOrEmpty(currentNpc2Id) 
+            ? LiveLlmCharacterBase.GetCharacter(currentNpc2Id) 
+            : null;
+        
+        if (npc1 != null && npc2 != null)
+        {
+            // Two NPCs talking - make them look at each other
+            npc1.SetLookTarget(npc2.transform);
+            npc2.SetLookTarget(npc1.transform);
+            Debug.Log($"[NpcConversation] 👀 {currentNpc1Id} and {currentNpc2Id} now looking at each other");
+        }
+        else if (npc1 != null)
+        {
+            // Monologue - NPC could look at player or just stay as is
+            Debug.Log($"[NpcConversation] 👀 {currentNpc1Id} monologue - no look target set");
+        }
+    }
+    
+    /// <summary>
+    /// Clear look targets for conversation participants.
+    /// </summary>
+    private void ClearNpcLookTargets()
+    {
+        if (!string.IsNullOrEmpty(currentNpc1Id))
+        {
+            var npc1 = LiveLlmCharacterBase.GetCharacter(currentNpc1Id);
+            npc1?.ClearLookTarget();
+        }
+        
+        if (!string.IsNullOrEmpty(currentNpc2Id))
+        {
+            var npc2 = LiveLlmCharacterBase.GetCharacter(currentNpc2Id);
+            npc2?.ClearLookTarget();
+        }
+        
+        Debug.Log("[NpcConversation] 👀 Cleared NPC look targets");
+        
+        currentNpc1Id = null;
+        currentNpc2Id = null;
+    }
+    
+    #endregion
+}

@@ -33,6 +33,24 @@ public class LiveLlmCharacterBase : MonoBehaviour
     [Header("WebSocket")]
     [SerializeField] private string wsUrl = "ws://127.0.0.1:8000/ws";
 
+    [Header("Look At")]
+    [Tooltip("How fast the character rotates to face the target (degrees per second)")]
+    [SerializeField] private float lookAtSpeed = 90f;
+    [Tooltip("Only rotate on Y axis (horizontal)")]
+    [SerializeField] private bool horizontalOnly = true;
+    [Tooltip("How often to glance at the player during conversation (seconds)")]
+    [SerializeField] private float playerGlanceInterval = 4f;
+    [Tooltip("How long to look at the player before looking away (seconds)")]
+    [SerializeField] private float playerGlanceDuration = 2f;
+    
+    // Look-at state
+    private Transform currentLookTarget;
+    private bool isLookingAtTarget;
+    private Quaternion originalRotation;
+    private bool hasOriginalRotation;
+    private bool isReturningToOriginal;
+    private Coroutine playerGlanceCoroutine;
+
     private const int SampleRate = 48_000;
     private const float TtsStopGrace = 1.5f;
     private const float TtsStopMinDelay = 2.0f;
@@ -186,6 +204,154 @@ public class LiveLlmCharacterBase : MonoBehaviour
         ws = null;
     }
 
+    protected virtual void Update()
+    {
+        // Handle look-at rotation (looking at target)
+        if (isLookingAtTarget && currentLookTarget != null)
+        {
+            Vector3 targetPos = currentLookTarget.position;
+            
+            if (horizontalOnly)
+            {
+                // Only rotate horizontally (Y axis)
+                targetPos.y = transform.position.y;
+            }
+            
+            Vector3 direction = targetPos - transform.position;
+            if (direction.sqrMagnitude > 0.001f)
+            {
+                Quaternion targetRotation = Quaternion.LookRotation(direction);
+                transform.rotation = Quaternion.RotateTowards(
+                    transform.rotation, 
+                    targetRotation, 
+                    lookAtSpeed * Time.deltaTime
+                );
+            }
+        }
+        // Handle returning to original rotation
+        else if (isReturningToOriginal && hasOriginalRotation)
+        {
+            transform.rotation = Quaternion.RotateTowards(
+                transform.rotation,
+                originalRotation,
+                lookAtSpeed * Time.deltaTime
+            );
+            
+            // Check if we've reached the original rotation
+            if (Quaternion.Angle(transform.rotation, originalRotation) < 0.5f)
+            {
+                transform.rotation = originalRotation;
+                isReturningToOriginal = false;
+                Debug.Log($"[{characterId}] Returned to original rotation");
+            }
+        }
+    }
+
+    #region Look At System
+    
+    /// <summary>
+    /// Make this character look at another transform (e.g., another NPC).
+    /// </summary>
+    public void SetLookTarget(Transform target)
+    {
+        // Save original rotation before we start looking (only if not already looking)
+        if (!isLookingAtTarget && !isReturningToOriginal)
+        {
+            originalRotation = transform.rotation;
+            hasOriginalRotation = true;
+        }
+        
+        currentLookTarget = target;
+        isLookingAtTarget = target != null;
+        isReturningToOriginal = false; // Stop returning if we're now looking at something
+        
+        if (target != null)
+        {
+            Debug.Log($"[{characterId}] Now looking at {target.name} (saved original rotation)");
+        }
+    }
+    
+    /// <summary>
+    /// Make this character look at another character by ID.
+    /// </summary>
+    public void SetLookTarget(string targetCharacterId)
+    {
+        var targetCharacter = GetCharacter(targetCharacterId);
+        if (targetCharacter != null)
+        {
+            SetLookTarget(targetCharacter.transform);
+        }
+        else
+        {
+            Debug.LogWarning($"[{characterId}] Cannot look at '{targetCharacterId}' - character not found");
+        }
+    }
+    
+    /// <summary>
+    /// Stop looking at the current target and return to original rotation.
+    /// </summary>
+    public void ClearLookTarget()
+    {
+        if (currentLookTarget != null)
+        {
+            Debug.Log($"[{characterId}] Stopped looking at {currentLookTarget.name}, returning to original rotation");
+        }
+        currentLookTarget = null;
+        isLookingAtTarget = false;
+        
+        // Start returning to original rotation
+        if (hasOriginalRotation)
+        {
+            isReturningToOriginal = true;
+        }
+    }
+    
+    /// <summary>
+    /// Check if currently looking at a target.
+    /// </summary>
+    public bool IsLookingAtTarget => isLookingAtTarget;
+    
+    /// <summary>
+    /// Coroutine that periodically makes the NPC glance at the player during conversation.
+    /// </summary>
+    private IEnumerator PlayerGlanceLoop()
+    {
+        Debug.Log($"[{characterId}] 👀 Starting player glance loop");
+        
+        // Initial look at player
+        if (player != null)
+        {
+            SetLookTarget(player);
+        }
+        
+        while (isConversationActive && player != null)
+        {
+            // Look at player for the glance duration
+            yield return new WaitForSeconds(playerGlanceDuration);
+            
+            // Look away (return to original) - but only if not currently in NPC-NPC convo
+            // (NPC-NPC convos set their own look targets via NpcConversationController)
+            if (isConversationActive && currentLookTarget == player)
+            {
+                ClearLookTarget();
+            }
+            
+            // Wait before next glance
+            yield return new WaitForSeconds(playerGlanceInterval - playerGlanceDuration);
+            
+            // Glance at player again (if still in conversation and not looking at another NPC)
+            if (isConversationActive && !isLookingAtTarget && player != null)
+            {
+                SetLookTarget(player);
+            }
+        }
+        
+        playerGlanceCoroutine = null;
+        Debug.Log($"[{characterId}] 👀 Player glance loop ended");
+    }
+    
+    #endregion
+
     protected virtual void OnTriggerEnter(Collider other)
     {
         if (!other.CompareTag("Player")) return;
@@ -219,6 +385,12 @@ public class LiveLlmCharacterBase : MonoBehaviour
         isConversationActive = true;
         LiveLlmManager.Instance?.RegisterCharacter(this);
         Debug.Log($"[{characterId}] Conversation started.");
+        
+        // Start periodic glancing at the player
+        if (player != null && playerGlanceCoroutine == null)
+        {
+            playerGlanceCoroutine = StartCoroutine(PlayerGlanceLoop());
+        }
     }
 
     protected void StopConversation()
@@ -229,6 +401,14 @@ public class LiveLlmCharacterBase : MonoBehaviour
         LiveLlmManager.Instance?.UnregisterCharacter(this);
         Debug.Log($"[{characterId}] Conversation stopped.");
         ForceStopTts(true);
+        
+        // Stop glancing at the player and return to original rotation
+        if (playerGlanceCoroutine != null)
+        {
+            StopCoroutine(playerGlanceCoroutine);
+            playerGlanceCoroutine = null;
+        }
+        ClearLookTarget();
     }
 
     public void SendMicFrame(byte[] frame, float[] floatChunk)
@@ -279,7 +459,22 @@ public class LiveLlmCharacterBase : MonoBehaviour
         switch (msg.type)
         {
             case "partial_user_request":
+                // Optional: voice activity marker (does not increment interaction count)
+                if (PlayerInteractionLogger.Instance != null)
+                {
+                    PlayerInteractionLogger.Instance.LogPlayerSpeaking();
+                }
+                Debug.Log($"[{characterId}] {msg.type}: {msg.content}");
+                break;
             case "final_user_request":
+                // Count a "Player-NPC Interaction" when the player's utterance is finalized.
+                // The backend attaches character_id to each message, so only the addressed NPC logs it.
+                if (PlayerInteractionLogger.Instance != null)
+                {
+                    PlayerInteractionLogger.Instance.LogPlayerNpcInteraction(characterId, msg.content);
+                }
+                Debug.Log($"[{characterId}] {msg.type}: {msg.content}");
+                break;
             case "partial_assistant_answer":
             case "final_assistant_answer":
                 Debug.Log($"[{characterId}] {msg.type}: {msg.content}");
