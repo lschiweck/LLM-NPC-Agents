@@ -290,7 +290,17 @@ public class NpcInjectionTriggerSystem : MonoBehaviour
 
     private void OnNpcConversationEnded()
     {
+        // Prevent duplicate end events
+        if (!npcConversationRunning) return;
+        
         npcConversationRunning = false;
+        
+        // Log to analytics (only once per conversation)
+        if (PlayerInteractionLogger.Instance != null && !string.IsNullOrEmpty(lastFiredTrigger))
+        {
+            PlayerInteractionLogger.Instance.LogNpcConversationEnd(lastFiredTrigger, 0);
+            lastFiredTrigger = ""; // Clear to prevent duplicate logging
+        }
         
         if (waitingForConversationEnd)
         {
@@ -299,6 +309,8 @@ public class NpcInjectionTriggerSystem : MonoBehaviour
             StartTimer();
         }
     }
+    
+    private string lastFiredTrigger = "";
 
     #endregion
 
@@ -457,6 +469,19 @@ public class NpcInjectionTriggerSystem : MonoBehaviour
         string npc2 = category.isMonologue ? "" : npc2Id;
         
         Log($"Starting: {categoryId} ({(category.isMonologue ? "monologue" : turns + " turns")})");
+        
+        // Track for end logging
+        lastFiredTrigger = categoryId;
+        
+        // Log to analytics file
+        if (PlayerInteractionLogger.Instance != null)
+        {
+            PlayerInteractionLogger.Instance.LogNpcConversationStart(npc1, npc2, categoryId, prompt);
+        }
+        else
+        {
+            Debug.LogWarning("[NpcInjection] PlayerInteractionLogger not found! Analytics not recorded.");
+        }
         
         npcController.StartConversation(npc1, npc2, turns, prompt);
         return true;

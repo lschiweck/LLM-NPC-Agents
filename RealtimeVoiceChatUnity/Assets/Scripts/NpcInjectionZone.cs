@@ -28,13 +28,36 @@ public class NpcInjectionZone : MonoBehaviour
     [Header("Debug")]
     [SerializeField] private bool showDebugGizmo = true;
     [SerializeField] private Color gizmoColor = new Color(1f, 0.5f, 0f, 0.3f);
+    
+    private bool playerInside = false;
+
+    private void OnEnable()
+    {
+        Debug.Log($"[NpcInjectionZone] ✅ {zoneType} zone ENABLED on {gameObject.name}");
+    }
+    
+    private void OnDisable()
+    {
+        Debug.Log($"[NpcInjectionZone] ❌ {zoneType} zone DISABLED on {gameObject.name}");
+    }
 
     private void OnTriggerEnter(Collider other)
     {
         if (!other.CompareTag(playerTag)) return;
         
-        // Log FIRST so we always see it
-        Debug.Log($"[NpcInjectionZone] Player ENTERED {zoneType} zone");
+        // Prevent duplicate events
+        if (playerInside) return;
+        playerInside = true;
+        
+        // ALWAYS log - both console and file
+        string zoneName = zoneType.ToString();
+        Debug.Log($"[NpcInjectionZone] 📍 Player ENTERED {zoneName} zone (frame {Time.frameCount})");
+        
+        // Log to file for analytics
+        if (PlayerInteractionLogger.Instance != null)
+        {
+            PlayerInteractionLogger.Instance.LogZoneEnter(zoneName);
+        }
         
         var system = NpcInjectionTriggerSystem.Instance;
         if (system == null)
@@ -63,8 +86,19 @@ public class NpcInjectionZone : MonoBehaviour
     {
         if (!other.CompareTag(playerTag)) return;
         
-        // Log FIRST so we always see it
-        Debug.Log($"[NpcInjectionZone] Player LEFT {zoneType} zone");
+        // Prevent duplicate events
+        if (!playerInside) return;
+        playerInside = false;
+        
+        // ALWAYS log - both console and file
+        string zoneName = zoneType.ToString();
+        Debug.Log($"[NpcInjectionZone] 📍 Player LEFT {zoneName} zone (frame {Time.frameCount})");
+        
+        // Log to file for analytics
+        if (PlayerInteractionLogger.Instance != null)
+        {
+            PlayerInteractionLogger.Instance.LogZoneExit(zoneName);
+        }
         
         var system = NpcInjectionTriggerSystem.Instance;
         if (system == null)
