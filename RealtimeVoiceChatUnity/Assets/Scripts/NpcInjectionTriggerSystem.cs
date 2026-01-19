@@ -32,6 +32,8 @@ public class NpcInjectionTriggerSystem : MonoBehaviour
     
     [Header("Debug")]
     [SerializeField] private bool debugLogging = true;
+    [Tooltip("Log status every X seconds (0 = disabled)")]
+    [SerializeField] private float periodicStatusLogInterval = 0f;
 
     // Trigger states - Location triggers are OFF by default, Fallbacks are ALWAYS ON
     private bool triggerSudoku = false;
@@ -161,6 +163,12 @@ public class NpcInjectionTriggerSystem : MonoBehaviour
         
         // Start the injection loop
         StartTimer();
+        
+        // Start periodic status log if enabled
+        if (periodicStatusLogInterval > 0)
+        {
+            StartCoroutine(PeriodicStatusLog());
+        }
     }
 
     private void OnDestroy()
@@ -220,23 +228,38 @@ public class NpcInjectionTriggerSystem : MonoBehaviour
 
     /// <summary>
     /// Called when player speaks (detected by voice activity).
-    /// Suppresses injections until NPC responds + buffer.
+    /// Just extends the engagement window slightly - doesn't block for ages.
     /// </summary>
     public void OnPlayerSpeaking()
     {
-        // Set engaged until far in the future - will be updated when NPC responds
-        playerEngagedUntil = Time.time + 60f;
-        Log("Player speaking - engaged");
+        // Only extend if we're not already engaged for longer
+        // This gives a 8 second window after the player stops speaking
+        float newEngagedTime = Time.time + 8f;
+        if (newEngagedTime > playerEngagedUntil)
+        {
+            playerEngagedUntil = newEngagedTime;
+            // Don't spam logs - only log occasionally
+        }
     }
 
     /// <summary>
     /// Called when NPC finishes responding to player.
+    /// Resets engagement to just a short buffer.
     /// </summary>
     public void OnNpcFinishedSpeakingToPlayer()
     {
-        // After NPC finishes, wait buffer time
+        // After NPC finishes, just a short buffer then ready
         playerEngagedUntil = Time.time + engagementBufferSeconds;
-        Log($"NPC done speaking to player - {engagementBufferSeconds}s buffer");
+        Log($"NPC done - {engagementBufferSeconds}s buffer");
+    }
+    
+    /// <summary>
+    /// Reset engagement immediately (for testing/debug).
+    /// </summary>
+    public void ResetEngagement()
+    {
+        playerEngagedUntil = 0f;
+        Log("Engagement reset");
     }
 
     #endregion
@@ -448,6 +471,15 @@ public class NpcInjectionTriggerSystem : MonoBehaviour
         if (debugLogging)
         {
             Debug.Log($"[NpcInjection] {message}");
+        }
+    }
+    
+    private IEnumerator PeriodicStatusLog()
+    {
+        while (true)
+        {
+            yield return new WaitForSeconds(periodicStatusLogInterval);
+            Debug.Log($"[NpcInjection] 📊 STATUS: Sudoku={triggerSudoku}, Kitchen={triggerKitchen}, InNpcZone={playerInNpcZone}, Engaged={(Time.time < playerEngagedUntil ? $"YES ({playerEngagedUntil - Time.time:F0}s)" : "NO")}");
         }
     }
 

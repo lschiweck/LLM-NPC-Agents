@@ -33,24 +33,28 @@ public class NpcInjectionZone : MonoBehaviour
     {
         if (!other.CompareTag(playerTag)) return;
         
+        // Log FIRST so we always see it
+        Debug.Log($"[NpcInjectionZone] Player ENTERED {zoneType} zone");
+        
         var system = NpcInjectionTriggerSystem.Instance;
-        if (system == null) return;
+        if (system == null)
+        {
+            Debug.LogWarning("[NpcInjectionZone] NpcInjectionTriggerSystem.Instance is NULL!");
+            return;
+        }
         
         switch (zoneType)
         {
             case ZoneType.Sudoku:
                 system.SetSudokuTrigger(true);
-                Debug.Log($"[NpcInjectionZone] Player entered SUDOKU zone");
                 break;
                 
             case ZoneType.Kitchen:
                 system.SetKitchenTrigger(true);
-                Debug.Log($"[NpcInjectionZone] Player entered KITCHEN zone");
                 break;
                 
             case ZoneType.NpcEngagement:
                 system.SetPlayerInNpcZone(true);
-                Debug.Log($"[NpcInjectionZone] Player entered NPC ENGAGEMENT zone (injections suppressed)");
                 break;
         }
     }
@@ -59,24 +63,28 @@ public class NpcInjectionZone : MonoBehaviour
     {
         if (!other.CompareTag(playerTag)) return;
         
+        // Log FIRST so we always see it
+        Debug.Log($"[NpcInjectionZone] Player LEFT {zoneType} zone");
+        
         var system = NpcInjectionTriggerSystem.Instance;
-        if (system == null) return;
+        if (system == null)
+        {
+            Debug.LogWarning("[NpcInjectionZone] NpcInjectionTriggerSystem.Instance is NULL!");
+            return;
+        }
         
         switch (zoneType)
         {
             case ZoneType.Sudoku:
                 system.SetSudokuTrigger(false);
-                Debug.Log($"[NpcInjectionZone] Player left SUDOKU zone");
                 break;
                 
             case ZoneType.Kitchen:
                 system.SetKitchenTrigger(false);
-                Debug.Log($"[NpcInjectionZone] Player left KITCHEN zone");
                 break;
                 
             case ZoneType.NpcEngagement:
                 system.SetPlayerInNpcZone(false);
-                Debug.Log($"[NpcInjectionZone] Player left NPC ENGAGEMENT zone (injections allowed)");
                 break;
         }
     }
