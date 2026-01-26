@@ -17,6 +17,8 @@ public class PlayerInteractionLogger : MonoBehaviour
     [SerializeField] private bool enableFileLogging = true;
     [SerializeField] private bool enableConsoleLogging = true;
     [SerializeField] private string logFileName = "player_interactions";
+    [SerializeField] private float flushIntervalSeconds = 0.5f;
+    [SerializeField] private int maxBufferedLines = 50;
     
     [Header("Debug")]
     [SerializeField] private bool verboseLogging = true;
@@ -24,6 +26,8 @@ public class PlayerInteractionLogger : MonoBehaviour
     private string logFilePath;
     private StreamWriter logWriter;
     private StringBuilder pendingLogs = new StringBuilder();
+    private int pendingLineCount = 0;
+    private float lastFlushTime = 0f;
     
     // Analytics tracking
     private Dictionary<string, float> zoneEnterTimes = new Dictionary<string, float>();
@@ -49,6 +53,7 @@ public class PlayerInteractionLogger : MonoBehaviour
         
         sessionStartTime = Time.time;
         InitializeLogFile();
+        lastFlushTime = Time.unscaledTime;
     }
 
     private void InitializeLogFile()
@@ -97,6 +102,7 @@ public class PlayerInteractionLogger : MonoBehaviour
 
     private void OnDestroy()
     {
+        FlushPendingLogs();
         // Write session summary before closing
         WriteSessionSummary();
         
@@ -109,6 +115,7 @@ public class PlayerInteractionLogger : MonoBehaviour
 
     private void OnApplicationQuit()
     {
+        FlushPendingLogs();
         WriteSessionSummary();
         
         if (logWriter != null)
@@ -267,13 +274,42 @@ public class PlayerInteractionLogger : MonoBehaviour
                 "{0},{1:F2},{2},{3},\"{4}\",{5:F2}",
                 globalTime, sessionTime, eventType, zone, safeDetails, duration);
             
-            logWriter.WriteLine(line);
-            logWriter.Flush(); // Ensure immediate write
+            pendingLogs.AppendLine(line);
+            pendingLineCount++;
+
+            if (pendingLineCount >= maxBufferedLines ||
+                Time.unscaledTime - lastFlushTime >= flushIntervalSeconds)
+            {
+                FlushPendingLogs();
+            }
         }
         catch (Exception e)
         {
             Debug.LogError($"[PlayerLogger] Write error: {e.Message}");
         }
+    }
+
+    private void Update()
+    {
+        if (!enableFileLogging || logWriter == null) return;
+
+        if (pendingLineCount > 0 &&
+            Time.unscaledTime - lastFlushTime >= flushIntervalSeconds)
+        {
+            FlushPendingLogs();
+        }
+    }
+
+    private void FlushPendingLogs()
+    {
+        if (!enableFileLogging || logWriter == null) return;
+        if (pendingLineCount == 0) return;
+
+        logWriter.Write(pendingLogs.ToString());
+        logWriter.Flush();
+        pendingLogs.Clear();
+        pendingLineCount = 0;
+        lastFlushTime = Time.unscaledTime;
     }
     
     private void WriteSessionSummary()

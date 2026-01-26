@@ -68,6 +68,7 @@ public class LiveLlmCharacterBase : MonoBehaviour
     private int ttsReadIndex;
     private int ttsBufferedSamples;
     private AudioClip ttsStreamClip;
+    private AudioClip monitorClip;
 
     [Serializable]
     private class ServerMessage
@@ -418,9 +419,19 @@ public class LiveLlmCharacterBase : MonoBehaviour
 
         if (monitorSource != null && floatChunk != null)
         {
-            var clip = AudioClip.Create($"{characterId}_MicChunk", floatChunk.Length, 1, SampleRate, false);
-            clip.SetData(floatChunk, 0);
-            monitorSource.PlayOneShot(clip);
+            if (monitorClip == null || monitorClip.samples != floatChunk.Length)
+            {
+                monitorClip = AudioClip.Create(
+                    $"{characterId}_MicMonitor",
+                    floatChunk.Length,
+                    1,
+                    SampleRate,
+                    false
+                );
+            }
+
+            monitorClip.SetData(floatChunk, 0);
+            monitorSource.PlayOneShot(monitorClip);
         }
     }
 
