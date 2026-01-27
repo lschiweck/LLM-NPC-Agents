@@ -177,7 +177,7 @@ class AudioProcessor:
         self.stream.play(**play_kwargs) # Synchronous play for prewarm
         # Wait for prewarm to finish (indicated by on_audio_stream_stop)
         while self.stream.is_playing():
-            time.sleep(0.01)
+            self.finished_event.wait(timeout=0.01)
         self.finished_event.wait() # Wait for stop callback
         self.finished_event.clear()
 
@@ -205,7 +205,7 @@ class AudioProcessor:
 
         # Wait until the first chunk arrives or stream finishes
         while ttfa is None and (self.stream.is_playing() or not self.finished_event.is_set()):
-            time.sleep(0.01)
+            self.finished_event.wait(timeout=0.01)
         self.stream.stop() # Ensure stream stops cleanly
 
         # Wait for stop callback if it hasn't fired yet
@@ -397,7 +397,7 @@ class AudioProcessor:
                 # Wait briefly for stop confirmation? The finished_event handles this.
                 self.finished_event.wait(timeout=1.0) # Wait for stream stop confirmation
                 return False # Indicate interruption
-            time.sleep(0.01)
+            stop_event.wait(timeout=0.01)
 
         # # If loop exited normally, check if buffer still has content (stream finished before flush)
         if buffering and buffer and not stop_event.is_set():
@@ -575,7 +575,7 @@ class AudioProcessor:
                 buffer.clear()
                 self.finished_event.wait(timeout=1.0) # Wait for stream stop confirmation
                 return False # Indicate interruption
-            time.sleep(0.01)
+            stop_event.wait(timeout=0.01)
 
         # Flush remaining buffer if stream finished before flush condition met
         if buffering and buffer and not stop_event.is_set():

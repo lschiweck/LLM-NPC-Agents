@@ -70,6 +70,10 @@ public class LiveLlmCharacterBase : MonoBehaviour
     private AudioClip ttsStreamClip;
     private AudioClip monitorClip;
 
+    private byte[] ttsDecodeBuffer;
+    private float[] ttsSamplesBuffer;
+    private float[] ttsUpsampleBuffer;
+
     [Serializable]
     private class ServerMessage
     {
@@ -523,30 +527,25 @@ public class LiveLlmCharacterBase : MonoBehaviour
     {
         if (string.IsNullOrEmpty(base64Content) || !ttsSource) return;
 
-        byte[] pcmBytes;
-        try
+        if (!TryDecodeBase64(base64Content, ref ttsDecodeBuffer, out int bytesWritten))
         {
-            pcmBytes = Convert.FromBase64String(base64Content);
-        }
-        catch (Exception ex)
-        {
-            Debug.LogError($"[{characterId}] Invalid base64 chunk: {ex.Message}");
             return;
         }
 
-        int sampleCount = pcmBytes.Length / 2;
+        int sampleCount = bytesWritten / 2;
         if (sampleCount == 0) return;
 
         // Decode 24kHz samples
-        float[] samples24k = new float[sampleCount];
+        float[] samples24k = EnsureFloatBuffer(ref ttsSamplesBuffer, sampleCount);
         for (int i = 0; i < sampleCount; i++)
         {
-            short s = BitConverter.ToInt16(pcmBytes, i * 2);
+            short s = BitConverter.ToInt16(ttsDecodeBuffer, i * 2);
             samples24k[i] = Mathf.Clamp(s / 32768f, -1f, 1f);
         }
 
         // Upsample from 24kHz to 48kHz (2x) using linear interpolation
-        float[] samples48k = new float[sampleCount * 2];
+        int upsampleCount = sampleCount * 2;
+        float[] samples48k = EnsureFloatBuffer(ref ttsUpsampleBuffer, upsampleCount);
         for (int i = 0; i < sampleCount - 1; i++)
         {
             samples48k[i * 2] = samples24k[i];
@@ -556,72 +555,89 @@ public class LiveLlmCharacterBase : MonoBehaviour
         samples48k[(sampleCount - 1) * 2] = samples24k[sampleCount - 1];
         samples48k[(sampleCount - 1) * 2 + 1] = samples24k[sampleCount - 1];
 
-        EnqueueTtsSamples(samples48k);
-        MarkTtsPlaying(samples48k.Length / (float)SampleRate);
+        EnqueueTtsSamples(samples48k, upsampleCount);
+        MarkTtsPlaying(upsampleCount / (float)SampleRate);
     }
 
     private void PlayTtsChunk(string base64Content)
     {
         if (string.IsNullOrEmpty(base64Content) || !ttsSource) return;
 
-        byte[] pcmBytes;
-        try
+        if (!TryDecodeBase64(base64Content, ref ttsDecodeBuffer, out int bytesWritten))
         {
-            pcmBytes = Convert.FromBase64String(base64Content);
-        }
-        catch (Exception ex)
-        {
-            Debug.LogError($"[{characterId}] Invalid base64 chunk: {ex.Message}");
             return;
         }
 
-        int sampleCount = pcmBytes.Length / 2;
+        int sampleCount = bytesWritten / 2;
         if (sampleCount == 0) return;
 
-        float[] samples = new float[sampleCount];
+        float[] samples = EnsureFloatBuffer(ref ttsSamplesBuffer, sampleCount);
         for (int i = 0; i < sampleCount; i++)
         {
-            short s = BitConverter.ToInt16(pcmBytes, i * 2);
+            short s = BitConverter.ToInt16(ttsDecodeBuffer, i * 2);
             samples[i] = Mathf.Clamp(s / 32768f, -1f, 1f);
         }
 
-        EnqueueTtsSamples(samples);
+        EnqueueTtsSamples(samples, sampleCount);
         MarkTtsPlaying(sampleCount / (float)SampleRate);
     }
 
-    private void EnqueueTtsSamples(float[] samples)
+    private void EnqueueTtsSamples(float[] samples, int count)
     {
+        if (count <= 0) return;
+
         lock (ttsBufferLock)
         {
-            foreach (float sample in samples)
+            int bufferLength = ttsBuffer.Length;
+            if (count >= bufferLength)
             {
-                ttsBuffer[ttsWriteIndex] = sample;
-                ttsWriteIndex = (ttsWriteIndex + 1) % ttsBuffer.Length;
-
-                if (ttsBufferedSamples < ttsBuffer.Length)
-                {
-                    ttsBufferedSamples++;
-                }
-                else
-                {
-                    ttsReadIndex = (ttsReadIndex + 1) % ttsBuffer.Length;
-                }
+                int srcIndex = count - bufferLength;
+                Array.Copy(samples, srcIndex, ttsBuffer, 0, bufferLength);
+                ttsReadIndex = 0;
+                ttsWriteIndex = 0;
+                ttsBufferedSamples = bufferLength;
+                return;
             }
+
+            int space = bufferLength - ttsBufferedSamples;
+            if (count > space)
+            {
+                int dropCount = count - space;
+                ttsReadIndex = (ttsReadIndex + dropCount) % bufferLength;
+                ttsBufferedSamples -= dropCount;
+            }
+
+            int firstCopy = Math.Min(count, bufferLength - ttsWriteIndex);
+            Array.Copy(samples, 0, ttsBuffer, ttsWriteIndex, firstCopy);
+            int remaining = count - firstCopy;
+            if (remaining > 0)
+            {
+                Array.Copy(samples, firstCopy, ttsBuffer, 0, remaining);
+            }
+
+            ttsWriteIndex = (ttsWriteIndex + count) % bufferLength;
+            ttsBufferedSamples = Math.Min(ttsBufferedSamples + count, bufferLength);
         }
     }
 
     private void OnAudioRead(float[] data)
     {
-        int filled = 0;
-
+        int filled;
         lock (ttsBufferLock)
         {
-            while (filled < data.Length && ttsBufferedSamples > 0)
+            int toRead = Math.Min(data.Length, ttsBufferedSamples);
+            filled = toRead;
+            if (toRead > 0)
             {
-                data[filled] = ttsBuffer[ttsReadIndex];
-                ttsReadIndex = (ttsReadIndex + 1) % ttsBuffer.Length;
-                ttsBufferedSamples--;
-                filled++;
+                int firstCopy = Math.Min(toRead, ttsBuffer.Length - ttsReadIndex);
+                Array.Copy(ttsBuffer, ttsReadIndex, data, 0, firstCopy);
+                int remaining = toRead - firstCopy;
+                if (remaining > 0)
+                {
+                    Array.Copy(ttsBuffer, 0, data, firstCopy, remaining);
+                }
+                ttsReadIndex = (ttsReadIndex + toRead) % ttsBuffer.Length;
+                ttsBufferedSamples -= toRead;
             }
         }
 
@@ -629,6 +645,78 @@ public class LiveLlmCharacterBase : MonoBehaviour
         {
             data[filled++] = 0f;
         }
+    }
+
+    private static float[] EnsureFloatBuffer(ref float[] buffer, int requiredLength)
+    {
+        if (buffer == null || buffer.Length < requiredLength)
+        {
+            buffer = new float[requiredLength];
+        }
+        return buffer;
+    }
+
+    private static bool TryDecodeBase64(string content, ref byte[] buffer, out int bytesWritten)
+    {
+        bytesWritten = 0;
+        int expectedBytes = GetDecodedByteCount(content);
+        if (expectedBytes <= 0)
+        {
+            return false;
+        }
+
+        if (buffer == null || buffer.Length < expectedBytes)
+        {
+            buffer = new byte[expectedBytes];
+        }
+
+        try
+        {
+            if (Convert.TryFromBase64String(content, buffer, out bytesWritten))
+            {
+                return true;
+            }
+        }
+        catch (Exception ex)
+        {
+            Debug.LogError($"[Base64] Failed to decode chunk: {ex.Message}");
+            return false;
+        }
+
+        try
+        {
+            byte[] fallback = Convert.FromBase64String(content);
+            bytesWritten = fallback.Length;
+            if (buffer.Length < bytesWritten)
+            {
+                buffer = new byte[bytesWritten];
+            }
+            Array.Copy(fallback, buffer, bytesWritten);
+            return true;
+        }
+        catch (Exception ex)
+        {
+            Debug.LogError($"[Base64] Invalid base64 chunk: {ex.Message}");
+            return false;
+        }
+    }
+
+    private static int GetDecodedByteCount(string base64)
+    {
+        if (string.IsNullOrEmpty(base64))
+        {
+            return 0;
+        }
+
+        int len = base64.Length;
+        int padding = 0;
+        if (len >= 2)
+        {
+            if (base64[len - 1] == '=') padding++;
+            if (base64[len - 2] == '=') padding++;
+        }
+
+        return (len * 3 / 4) - padding;
     }
 
     private void OnSetAudioPosition(int newPosition) { }

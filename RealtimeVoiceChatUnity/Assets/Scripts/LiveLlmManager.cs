@@ -26,6 +26,7 @@ public class LiveLlmManager : MonoBehaviour
     private int lastSamplePosition;
     private int pendingCount;
     private bool capturing;
+    private bool initializing;
 
     private void Awake()
     {
@@ -81,7 +82,7 @@ public class LiveLlmManager : MonoBehaviour
 
     private void StartCapture()
     {
-        if (capturing) return;
+        if (capturing || initializing) return;
         micDevice = !string.IsNullOrEmpty(microphoneDeviceName)
             ? microphoneDeviceName
             : (Microphone.devices.Length > 0 ? Microphone.devices[0] : null);
@@ -92,8 +93,40 @@ public class LiveLlmManager : MonoBehaviour
             return;
         }
 
+        StartCoroutine(InitializeCapture());
+    }
+
+    private void StopCapture()
+    {
+        if (!capturing && !initializing) return;
+
+        capturing = false;
+        initializing = false;
+        Microphone.End(micDevice);
+        micClip = null;
+        pendingCount = 0;
+        Debug.Log("[LiveLlmManager] Microphone capture stopped.");
+    }
+
+    private System.Collections.IEnumerator InitializeCapture()
+    {
+        initializing = true;
         micClip = Microphone.Start(micDevice, true, 1, sampleRate);
-        while (Microphone.GetPosition(micDevice) <= 0) { }
+
+        float timeoutSeconds = 2f;
+        float startTime = Time.realtimeSinceStartup;
+        while (Microphone.GetPosition(micDevice) <= 0)
+        {
+            if (Time.realtimeSinceStartup - startTime > timeoutSeconds)
+            {
+                Debug.LogError("[LiveLlmManager] Microphone failed to start in time.");
+                Microphone.End(micDevice);
+                micClip = null;
+                initializing = false;
+                yield break;
+            }
+            yield return null;
+        }
 
         micReadBuffer = new float[micClip.samples];
         pendingSamples = new float[chunkSamples];
@@ -103,20 +136,10 @@ public class LiveLlmManager : MonoBehaviour
         pendingCount = 0;
         lastSamplePosition = 0;
         capturing = true;
+        initializing = false;
 
         StartCoroutine(CaptureLoop());
         Debug.Log("[LiveLlmManager] Microphone capture started.");
-    }
-
-    private void StopCapture()
-    {
-        if (!capturing) return;
-
-        capturing = false;
-        Microphone.End(micDevice);
-        micClip = null;
-        pendingCount = 0;
-        Debug.Log("[LiveLlmManager] Microphone capture stopped.");
     }
 
     private System.Collections.IEnumerator CaptureLoop()

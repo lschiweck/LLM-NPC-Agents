@@ -65,6 +65,12 @@ class ConversationLogger:
         self.log_injections = config.get("log_injections", True)
         self.log_npc_conversations = config.get("log_npc_conversations", True)
         self.log_director_notes = config.get("log_director_notes", True)
+
+        # Flush policy (reduce blocking I/O on hot paths)
+        self.flush_every_n = int(config.get("flush_every_n", 20))
+        self.flush_interval_seconds = float(config.get("flush_interval_seconds", 1.0))
+        self._pending_flush = 0
+        self._last_flush_time = time.time()
         
         # Session tracking
         self.session_id: Optional[str] = None
@@ -146,6 +152,7 @@ class ConversationLogger:
                 event_type="session_start",
                 data={"session_id": self.session_id}
             ))
+            self._last_flush_time = time.time()
             logger.info(f"📝 Started logging session: {self.session_file}")
         except Exception as e:
             logger.error(f"📝💥 Failed to start logging session: {e}")
@@ -162,7 +169,15 @@ class ConversationLogger:
             
         try:
             self._file_handle.write(json.dumps(entry.to_dict()) + "\n")
-            self._file_handle.flush()  # Ensure immediate write
+            self._pending_flush += 1
+            now = time.time()
+            if (
+                self._pending_flush >= self.flush_every_n
+                or (now - self._last_flush_time) >= self.flush_interval_seconds
+            ):
+                self._file_handle.flush()
+                self._pending_flush = 0
+                self._last_flush_time = now
         except Exception as e:
             logger.warning(f"📝⚠️ Failed to write log entry: {e}")
     
