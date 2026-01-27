@@ -1,5 +1,6 @@
 # server.py
 from queue import Queue, Empty
+from collections import deque
 import logging
 from logsetup import setup_logging
 
@@ -65,6 +66,7 @@ class CharacterSession:
     callbacks: Optional['TranscriptionCallbacks'] = None
     tasks: List[asyncio.Task] = field(default_factory=list)
     upsampler: Optional[UpsampleOverlap] = None
+    uses_shared_audio: bool = False
 
     def stop_connection(self):
         for task in self.tasks:
@@ -79,7 +81,7 @@ class CharacterSession:
         #
         # Instead: detach callbacks and leave the processor warm. Full shutdown still happens
         # in CharacterSession.shutdown() on server shutdown.
-        if self.audio_input:
+        if self.audio_input and not self.uses_shared_audio:
             try:
                 self.audio_input.realtime_callback = None
                 self.audio_input.recording_start_callback = None
@@ -303,6 +305,37 @@ async def lifespan(app: FastAPI):
     app.state.CharacterSessions: Dict[str, CharacterSession] = {}
     app.state.CharacterConfig = load_character_config()
     app.state.Aborting = False # Keep this? Its usage isn't clear in the provided snippet. Minimizing changes.
+
+    # Shared STT pipeline (single GPU Whisper/TurnDetect for all characters)
+    app.state.SharedSttEnabled = bool(config.initialization.shared_stt_pipeline)
+    app.state.SharedAudioInput = None
+    app.state.SharedAudioQueue = None
+    app.state.SharedAudioTask = None
+    app.state.SharedAudioSeen = None
+    app.state.SharedAudioSeenSet = None
+    app.state.SharedAudioSeenMax = int(getattr(config.initialization, "shared_stt_dedupe_window", 200))
+    # Track which character is the active conversation target (receives audio most recently)
+    # Only this character should generate LLM responses when using shared STT
+    app.state.ActiveConversationTarget = None
+    app.state.ActiveConversationTargetTime = 0.0
+
+    if app.state.SharedSttEnabled:
+        any_orpheus = any(
+            (cfg.get("tts_engine", DEFAULT_ENGINE) == "orpheus")
+            for cfg in (app.state.CharacterConfig or {}).values()
+        )
+        app.state.SharedAudioInput = AudioInputProcessor(
+            LANGUAGE,
+            is_orpheus=any_orpheus,
+            pipeline_latency=0.5,
+        )
+        app.state.SharedAudioQueue = asyncio.Queue()
+        app.state.SharedAudioTask = asyncio.create_task(
+            app.state.SharedAudioInput.process_chunk_queue(app.state.SharedAudioQueue)
+        )
+        app.state.SharedAudioSeen = deque()
+        app.state.SharedAudioSeenSet = set()
+        logger.info("🎙️ Shared STT pipeline enabled (single GPU STT for all characters)")
     
     # Pre-initialize pipelines if configured
     pre_init_mode = config.initialization.pre_init_mode
@@ -357,12 +390,17 @@ async def lifespan(app: FastAPI):
                     )
                     
                     # Also pre-initialize AudioInputProcessor (loads Whisper, VAD, turn detection)
-                    logger.info(f"🚀 Pre-initializing AudioInputProcessor for {char_id}...")
-                    session.audio_input = AudioInputProcessor(
-                        LANGUAGE,
-                        is_orpheus=(char_config.get("tts_engine", DEFAULT_ENGINE) == "orpheus"),
-                        pipeline_latency=0.5,
-                    )
+                    if app.state.SharedSttEnabled:
+                        session.audio_input = app.state.SharedAudioInput
+                        session.uses_shared_audio = True
+                        logger.info(f"🚀 Using shared STT pipeline for {char_id}")
+                    else:
+                        logger.info(f"🚀 Pre-initializing AudioInputProcessor for {char_id}...")
+                        session.audio_input = AudioInputProcessor(
+                            LANGUAGE,
+                            is_orpheus=(char_config.get("tts_engine", DEFAULT_ENGINE) == "orpheus"),
+                            pipeline_latency=0.5,
+                        )
                     
                     app.state.CharacterSessions[char_id] = session
                     logger.info(f"🚀✅ Pre-initialized {char_id} (pipeline + audio)")
@@ -601,6 +639,15 @@ async def lifespan(app: FastAPI):
     # Stop Game Manager (if enabled)
     # if app.state.GameManager:
     #     app.state.GameManager.stop()
+
+    # Shutdown shared STT pipeline if enabled
+    shared_task = getattr(app.state, "SharedAudioTask", None)
+    if shared_task is not None and not shared_task.done():
+        shared_task.cancel()
+        await asyncio.gather(shared_task, return_exceptions=True)
+    shared_audio = getattr(app.state, "SharedAudioInput", None)
+    if shared_audio is not None:
+        shared_audio.shutdown()
     
     sessions: Dict[str, CharacterSession] = getattr(app.state, "CharacterSessions", {})
     for session in sessions.values():
@@ -908,6 +955,29 @@ async def process_incoming_data(ws: WebSocket, session: CharacterSession) -> Non
                 # The rest of the payload is raw PCM bytes
                 metadata["pcm"] = raw[8:]
 
+                # If using shared STT, dedupe identical mic frames across characters
+                if getattr(app.state, "SharedSttEnabled", False) and session.audio_queue is getattr(app.state, "SharedAudioQueue", None):
+                    key = (timestamp_ms, len(raw))
+                    seen_set = getattr(app.state, "SharedAudioSeenSet", None)
+                    seen_queue = getattr(app.state, "SharedAudioSeen", None)
+                    max_seen = int(getattr(app.state, "SharedAudioSeenMax", 200))
+                    if seen_set is not None and seen_queue is not None:
+                        if key in seen_set:
+                            continue  # Duplicate frame from another character, skip
+                        seen_set.add(key)
+                        seen_queue.append(key)
+                        if len(seen_queue) > max_seen:
+                            old = seen_queue.popleft()
+                            seen_set.discard(old)
+                    
+                    # Track this character as the active conversation target
+                    # (the one the player is currently talking to - first to send non-duplicate audio)
+                    prev_target = getattr(app.state, "ActiveConversationTarget", None)
+                    if prev_target != session.character_id:
+                        logger.info(f"🎯 Active conversation target: {session.character_id} (was: {prev_target})")
+                    app.state.ActiveConversationTarget = session.character_id
+                    app.state.ActiveConversationTargetTime = time.time()
+
                 # Check queue size before putting data
                 current_qsize = session.audio_queue.qsize() if session.audio_queue else MAX_AUDIO_QUEUE_SIZE
                 if current_qsize < MAX_AUDIO_QUEUE_SIZE:
@@ -1010,7 +1080,7 @@ async def send_text_messages(ws: WebSocket, session: CharacterSession) -> None:
     except Exception as e:
         logger.exception(f"🖥️💥 {Colors.apply('EXCEPTION').red} in send_text_messages: {repr(e)}")
 
-async def _reset_interrupt_flag_async(audio_input: AudioInputProcessor, callbacks: 'TranscriptionCallbacks'):
+async def _reset_interrupt_flag_async(callbacks: 'TranscriptionCallbacks'):
     """
     Resets the microphone interruption flag after a delay (async version).
 
@@ -1023,10 +1093,10 @@ async def _reset_interrupt_flag_async(audio_input: AudioInputProcessor, callback
         callbacks: The TranscriptionCallbacks instance for the connection.
     """
     await asyncio.sleep(1)
-    # Check the AudioInputProcessor's own interrupted state
-    if audio_input.interrupted:
+    # Check the connection-specific interruption state
+    if callbacks.mic_interrupted:
         logger.info(f"{Colors.apply('🖥️🎙️ ▶️ Microphone continued (async reset)').cyan}")
-        audio_input.interrupted = False
+        callbacks.mic_interrupted = False
         # Reset connection-specific interruption time via callbacks
         callbacks.interruption_time = 0
         logger.info(Colors.apply("🖥️🎙️ interruption flag reset after TTS chunk (async)").cyan)
@@ -1056,13 +1126,12 @@ async def send_tts_chunks(app: FastAPI, session: CharacterSession) -> None:
 
             # Use connection-specific interruption_time via callbacks
             if (
-                session.audio_input
-                and session.audio_input.interrupted
-                and session.callbacks
+                session.callbacks
+                and session.callbacks.mic_interrupted
                 and session.callbacks.interruption_time
                 and time.time() - session.callbacks.interruption_time > 2.0
             ):
-                session.audio_input.interrupted = False
+                session.callbacks.mic_interrupted = False
                 session.callbacks.interruption_time = 0 # Reset via callbacks
                 logger.info(Colors.apply("🖥️🎙️ interruption flag reset after 2 seconds").cyan)
 
@@ -1087,7 +1156,7 @@ async def send_tts_chunks(app: FastAPI, session: CharacterSession) -> None:
                     int(session.pipeline.running_generation is not None), # session state
                     int(session.pipeline.is_valid_gen()), # session state
                     int(is_tts_finished), # Calculated local variable
-                    int(session.audio_input.interrupted) # Input processor state
+                    int(session.callbacks.mic_interrupted if session.callbacks else 0) # Input processor state
                 )
 
                 if curr_status != prev_status:
@@ -1163,9 +1232,9 @@ async def send_tts_chunks(app: FastAPI, session: CharacterSession) -> None:
             last_chunk_sent = time.time()
 
             # Use connection-specific state via callbacks
-            if session.callbacks and not session.callbacks.tts_chunk_sent and session.audio_input:
+            if session.callbacks and not session.callbacks.tts_chunk_sent:
                 # Use the async helper function instead of a thread
-                asyncio.create_task(_reset_interrupt_flag_async(session.audio_input, session.callbacks))
+                asyncio.create_task(_reset_interrupt_flag_async(session.callbacks))
 
             if session.callbacks:
                 session.callbacks.tts_chunk_sent = True # Set via callbacks
@@ -1220,6 +1289,7 @@ class TranscriptionCallbacks:
         self.tts_chunk_sent: bool = False
         self.tts_client_playing: bool = False
         self.interruption_time: float = 0.0
+        self.mic_interrupted: bool = False
 
         # These were already effectively instance variables or reset logic existed
         self.silence_active: bool = True
@@ -1256,6 +1326,7 @@ class TranscriptionCallbacks:
         self.tts_chunk_sent = False
         # Don't reset tts_client_playing here, it reflects client state reports
         self.interruption_time = 0.0
+        self.mic_interrupted = False
 
         # Reset other state variables
         self.silence_active = True
@@ -1340,6 +1411,14 @@ class TranscriptionCallbacks:
         Args:
             txt: The potential sentence text.
         """
+        # With shared STT, only generate for the active conversation target
+        # This prevents both NPCs from trying to respond when player is in range of multiple
+        if self.session.uses_shared_audio:
+            active_target = getattr(app.state, "ActiveConversationTarget", None)
+            if active_target and active_target != self.session.character_id:
+                logger.debug(f"🖥️🧠 Skipping generation for {self.session.character_id} (active target: {active_target})")
+                return
+        
         # Track LLM start time for logging
         self.llm_start_time = time.time()
         
@@ -1376,6 +1455,13 @@ class TranscriptionCallbacks:
             audio: The raw audio bytes corresponding to the final transcription. (Currently unused)
             txt: The transcription text (might be slightly refined in on_final).
         """
+        # With shared STT, only process final for the active conversation target
+        if self.session.uses_shared_audio:
+            active_target = getattr(app.state, "ActiveConversationTarget", None)
+            if active_target and active_target != self.session.character_id:
+                logger.debug(f"🖥️🏁 Skipping on_before_final for {self.session.character_id} (active target: {active_target})")
+                return
+        
         # Record turn end time - THIS is when perceived latency measurement should start
         self.turn_end_time = time.time()
         logger.info(Colors.apply('🖥️🏁 =================== USER TURN END ===================').light_gray)
@@ -1386,10 +1472,10 @@ class TranscriptionCallbacks:
             logger.info(f"{Colors.apply('🖥️🔊 TTS ALLOWED (before final)').blue}")
             self.session.pipeline.running_generation.tts_quick_allowed_event.set()
 
-        # first block further incoming audio (Audio processor's state)
-        if self.session.audio_input and not self.session.audio_input.interrupted:
+        # first block further incoming audio (connection-specific state)
+        if not self.mic_interrupted:
             logger.info(f"{Colors.apply('🖥️🎙️ ⏸️ Microphone interrupted (end of turn)').cyan}")
-            self.session.audio_input.interrupted = True
+            self.mic_interrupted = True
             self.interruption_time = time.time() # Set connection-specific flag
 
         logger.info(f"{Colors.apply('🖥️🔊 TTS STREAM RELEASED').blue}")
@@ -1712,24 +1798,31 @@ async def websocket_endpoint(ws: WebSocket):
     app.state.CharacterSessions[character_id] = session
     
     
-    if audio_input_needs_recreate(session.audio_input):
-        if session.audio_input is not None:
-            logger.warning(f"🔧 Recreating AudioInputProcessor for {character_id} (previous one was not healthy)...")
-            try:
-                session.audio_input.shutdown()
-            except Exception as e:
-                logger.warning(f"🔧⚠️ Failed to shutdown unhealthy AudioInputProcessor for {character_id}: {e}")
-
-        logger.info(f"🔧 Creating new AudioInputProcessor for {character_id} (NOT pre-initialized)...")
-        audio_start = time.time()
-        session.audio_input = AudioInputProcessor(
-            LANGUAGE,
-            is_orpheus=(session.config.get("tts_engine", DEFAULT_ENGINE) == "orpheus"),
-            pipeline_latency=0.5,
-        )
-        logger.info(f"🔧 AudioInputProcessor created in {time.time() - audio_start:.2f}s")
+    shared_stt = getattr(app.state, "SharedSttEnabled", False)
+    if shared_stt:
+        session.audio_input = getattr(app.state, "SharedAudioInput", None)
+        session.audio_queue = getattr(app.state, "SharedAudioQueue", None)
+        session.uses_shared_audio = True
+        logger.info("🎙️ Using shared STT pipeline for audio input")
     else:
-        logger.info(f"🚀✅ Using PRE-INITIALIZED AudioInputProcessor for {character_id}")
+        if audio_input_needs_recreate(session.audio_input):
+            if session.audio_input is not None:
+                logger.warning(f"🔧 Recreating AudioInputProcessor for {character_id} (previous one was not healthy)...")
+                try:
+                    session.audio_input.shutdown()
+                except Exception as e:
+                    logger.warning(f"🔧⚠️ Failed to shutdown unhealthy AudioInputProcessor for {character_id}: {e}")
+
+            logger.info(f"🔧 Creating new AudioInputProcessor for {character_id} (NOT pre-initialized)...")
+            audio_start = time.time()
+            session.audio_input = AudioInputProcessor(
+                LANGUAGE,
+                is_orpheus=(session.config.get("tts_engine", DEFAULT_ENGINE) == "orpheus"),
+                pipeline_latency=0.5,
+            )
+            logger.info(f"🔧 AudioInputProcessor created in {time.time() - audio_start:.2f}s")
+        else:
+            logger.info(f"🚀✅ Using PRE-INITIALIZED AudioInputProcessor for {character_id}")
 
     if session.pipeline is None:
         logger.info(f"🔧 Creating new SpeechPipelineManager for {character_id} (NOT pre-initialized)...")
@@ -1803,26 +1896,20 @@ async def websocket_endpoint(ws: WebSocket):
     
     callbacks = TranscriptionCallbacks(session, stop_npc_conversation=stop_npc_conv)
 
-    # Wire callbacks to the session-specific processors
-    session.audio_input.realtime_callback = callbacks.on_partial
-    session.audio_input.transcriber.potential_sentence_end = callbacks.on_potential_sentence
-    session.audio_input.transcriber.on_tts_allowed_to_synthesize = callbacks.on_tts_allowed_to_synthesize
-    session.audio_input.transcriber.potential_full_transcription_callback = callbacks.on_potential_final
-    session.audio_input.transcriber.potential_full_transcription_abort_callback = callbacks.on_potential_abort
-    session.audio_input.transcriber.full_transcription_callback = callbacks.on_final
-    session.audio_input.transcriber.before_final_sentence = callbacks.on_before_final
-    session.audio_input.recording_start_callback = callbacks.on_recording_start
-    session.audio_input.silence_active_callback = callbacks.on_silence_active
+    # Wire callbacks to the shared/session audio processor
+    if session.audio_input:
+        session.audio_input.add_listener(callbacks)
 
     session.pipeline.on_partial_assistant_text = callbacks.on_partial_assistant_text
     session.pipeline.on_first_audio_callback = callbacks.on_first_audio_chunk
 
     tasks = [
         asyncio.create_task(process_incoming_data(ws, session)),
-        asyncio.create_task(session.audio_input.process_chunk_queue(audio_chunks)),
         asyncio.create_task(send_text_messages(ws, session)),
         asyncio.create_task(send_tts_chunks(app, session)),
     ]
+    if not shared_stt:
+        tasks.insert(1, asyncio.create_task(session.audio_input.process_chunk_queue(audio_chunks)))
     session.tasks = tasks
     
     # Send character_ready signal - initialization is complete
@@ -1865,6 +1952,9 @@ async def websocket_endpoint(ws: WebSocket):
         conv_logger = get_conversation_logger()
         if conv_logger:
             conv_logger.log_character_disconnect(character_id)
+
+        if session.audio_input and session.callbacks:
+            session.audio_input.remove_listener(session.callbacks)
 
         session.stop_connection()
         if session.config.get("persist_history", False) and session.pipeline:

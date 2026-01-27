@@ -9,7 +9,9 @@
     "pre_init_pipelines": true,
     "pre_init_mode": "all",
     "pre_init_character_ids": [],
-    "comment": "pre_init_mode: 'all' = load all characters from character_config.json, 'specific' = only load IDs in pre_init_character_ids, 'none' = disable pre-init"
+    "shared_stt_pipeline": true,
+    "shared_stt_dedupe_window": 200,
+    "comment": "pre_init_mode: 'all' = load all characters from character_config.json, 'specific' = only load IDs in pre_init_character_ids, 'none' = disable pre-init; shared_stt_pipeline uses one GPU STT for all characters"
   },
 
   "defaults": {

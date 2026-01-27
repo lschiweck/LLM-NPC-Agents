@@ -32,12 +32,16 @@ class InitializationSettings:
     pre_init_pipelines: bool = False
     pre_init_mode: str = "all"  # "all", "specific", or "none"
     pre_init_character_ids: List[str] = None
+    shared_stt_pipeline: bool = False
+    shared_stt_dedupe_window: int = 200
     
     def __post_init__(self):
         if self.pre_init_character_ids is None:
             self.pre_init_character_ids = []
         # Normalize mode
         self.pre_init_mode = self.pre_init_mode.lower() if self.pre_init_mode else "all"
+        if self.shared_stt_dedupe_window is None or self.shared_stt_dedupe_window <= 0:
+            self.shared_stt_dedupe_window = 200
 
 
 @dataclass
@@ -138,7 +142,9 @@ def load_server_config(config_path: Optional[Path] = None) -> ServerConfig:
                 "initialization": {
                     "pre_init_pipelines": False,
                     "pre_init_character_ids": [],
-                    "comment": "Set pre_init_pipelines to true to load models at startup"
+                    "shared_stt_pipeline": False,
+                    "shared_stt_dedupe_window": 200,
+                    "comment": "Set pre_init_pipelines to true to load models at startup; shared_stt_pipeline uses one GPU STT for all characters"
                 },
                 "defaults": {
                     "tts_engine": "kokoro",

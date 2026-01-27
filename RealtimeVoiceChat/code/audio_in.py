@@ -1,6 +1,6 @@
 import asyncio
 import logging
-from typing import Optional, Callable
+from typing import Optional, Callable, Any
 import numpy as np
 from scipy.signal import resample_poly
 from transcribe import TranscriptionProcessor
@@ -54,19 +54,43 @@ class AudioInputProcessor:
         self.recording_start_callback: Optional[Callable[[None], None]] = None # Type adjusted
         self.silence_active_callback: Optional[Callable[[bool], None]] = silence_active_callback
         self.interrupted = False # TODO: Consider renaming or clarifying usage (interrupted by user speech?)
+        self._listeners: list[Any] = []
 
         self._setup_callbacks()
         logger.info("👂🚀 AudioInputProcessor initialized.")
+
+    def add_listener(self, listener: Any) -> None:
+        """Register a listener object for transcription events."""
+        if listener not in self._listeners:
+            self._listeners.append(listener)
+
+    def remove_listener(self, listener: Any) -> None:
+        """Unregister a listener object."""
+        try:
+            self._listeners.remove(listener)
+        except ValueError:
+            pass
+
+    def _notify_listeners(self, method_name: str, *args) -> None:
+        for listener in list(self._listeners):
+            method = getattr(listener, method_name, None)
+            if callable(method):
+                try:
+                    method(*args)
+                except Exception as e:
+                    logger.warning(f"👂⚠️ Listener error in {method_name}: {e}", exc_info=True)
 
     def _silence_active_callback(self, is_active: bool) -> None:
         """Internal callback relay for silence detection status."""
         if self.silence_active_callback:
             self.silence_active_callback(is_active)
+        self._notify_listeners("on_silence_active", is_active)
 
     def _on_recording_start(self) -> None:
         """Internal callback relay triggered when the transcriber starts recording."""
         if self.recording_start_callback:
             self.recording_start_callback()
+        self._notify_listeners("on_recording_start")
 
     def abort_generation(self) -> None:
         """Signals the underlying transcriber to abort any ongoing generation process."""
@@ -81,8 +105,43 @@ class AudioInputProcessor:
                 self.last_partial_text = text
                 if self.realtime_callback:
                     self.realtime_callback(text)
+                self._notify_listeners("on_partial", text)
+
+        def potential_sentence_callback(text: str) -> None:
+            self._notify_listeners("on_potential_sentence", text)
+
+        def tts_allowed_callback() -> None:
+            self._notify_listeners("on_tts_allowed_to_synthesize")
+
+        def potential_full_callback(text: str) -> None:
+            self._notify_listeners("on_potential_final", text)
+
+        def potential_abort_callback() -> None:
+            self._notify_listeners("on_potential_abort")
+
+        def full_transcription_callback(text: str) -> None:
+            self._notify_listeners("on_final", text)
+
+        def before_final_callback(audio: Optional[np.ndarray], text: Optional[str]) -> bool:
+            result = False
+            for listener in list(self._listeners):
+                method = getattr(listener, "on_before_final", None)
+                if callable(method):
+                    try:
+                        value = method(audio, text)
+                        if isinstance(value, bool) and value:
+                            result = True
+                    except Exception as e:
+                        logger.warning(f"👂⚠️ Listener error in on_before_final: {e}", exc_info=True)
+            return result
 
         self.transcriber.realtime_transcription_callback = partial_transcript_callback
+        self.transcriber.potential_sentence_end = potential_sentence_callback
+        self.transcriber.on_tts_allowed_to_synthesize = tts_allowed_callback
+        self.transcriber.potential_full_transcription_callback = potential_full_callback
+        self.transcriber.potential_full_transcription_abort_callback = potential_abort_callback
+        self.transcriber.full_transcription_callback = full_transcription_callback
+        self.transcriber.before_final_sentence = before_final_callback
 
     async def _run_transcription_loop(self) -> None:
         """
@@ -197,13 +256,9 @@ class AudioInputProcessor:
                 if processed.size == 0:
                     continue # Skip empty chunks
 
-                # Feed audio only if not interrupted and transcriber should be running
-                if not self.interrupted:
-                    # Check failure flag again, as it might have been set between queue.get and here
-                     if not self._transcription_failed:
-                        # Feed audio to the underlying processor
-                        self.transcriber.feed_audio(processed.tobytes(), audio_data)
-                     # No 'else' needed here because the checks at the start of the loop handle termination
+                # Feed audio to the underlying processor
+                if not self._transcription_failed:
+                    self.transcriber.feed_audio(processed.tobytes(), audio_data)
 
             except asyncio.CancelledError:
                 logger.info("👂🚫 Audio processing task cancelled.")
