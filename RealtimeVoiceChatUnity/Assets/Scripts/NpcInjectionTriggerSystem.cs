@@ -67,6 +67,7 @@ public class NpcInjectionTriggerSystem : MonoBehaviour
 
     private void InitializeCategories()
     {
+        // NOTE: All prompts are PLAYER-FOCUSED - NPCs must reference what the detective discussed
         categories = new Dictionary<string, InjectionCategory>
         {
             ["sudoku"] = new InjectionCategory
@@ -77,10 +78,10 @@ public class NpcInjectionTriggerSystem : MonoBehaviour
                 isLocationBased = true,
                 prompts = new List<string>
                 {
-                    "Start a brief exchange about staying patient and looking for patterns in the Sudoku, explicitly anchored to the most recent relevant conversational cue (paraphrase only), without giving any actionable steps or numbers.",
-                    "Start a brief exchange about not rushing the Sudoku and avoiding forcing progress when nothing is clear, explicitly tied to the current tone in the last few turns, without giving any solving advice.",
-                    "Start a brief exchange about how stress affects focus on puzzles, grounded in the pacing or tension that just occurred in the conversation, keeping it general and not addressing the player directly.",
-                    "Start a brief exchange about how people sometimes over-read meaning into small puzzle details, explicitly responding to the most recent strong wording or assumption (paraphrase only), without giving any solving guidance."
+                    "The detective seems interested in David's Sudoku. Start a brief exchange about why the detective is looking at it. Reference something specific the detective said or asked recently. Don't give solving advice - just react to their interest.",
+                    "React to what the detective has been asking. Start a brief exchange sharing a memory about David and his puzzle obsession. Tie it to whatever topic the detective was just discussing.",
+                    "One of you finds the detective's focus on the Sudoku suspicious or interesting. Start a brief exchange about what the detective might be looking for, referencing their recent questions.",
+                    "React to the detective's investigation. Start a brief exchange wondering if the Sudoku connects to something the detective asked about earlier."
                 }
             },
             ["kitchen_safe"] = new InjectionCategory
@@ -91,10 +92,10 @@ public class NpcInjectionTriggerSystem : MonoBehaviour
                 isLocationBased = true,
                 prompts = new List<string>
                 {
-                    "Start a brief exchange about a safe in a kitchen feeling unusual, explicitly anchored to the most recent conversational cue (paraphrase only), without guessing what is inside or why it is there.",
-                    "Start a brief exchange where one agent frames a kitchen safe as normal and the other frames it as odd, keeping it mild and non-accusatory.",
-                    "Start a brief exchange reminding each other not to assume meaning from the safe until it is opened, without giving procedural instructions.",
-                    "Start a brief exchange about how unusual objects can pull attention away from the bigger picture, without introducing new facts."
+                    "The detective is in the kitchen. Start a brief exchange about why they're looking around there. Reference what they asked you about recently - are they suspicious of someone? Looking for something?",
+                    "Start a brief exchange wondering what the detective already knows about the safe. Connect it to their recent questions - did they ask about David's secrets? About who had access?",
+                    "React to being questioned. Start a brief exchange about the detective's investigation style - are they close to finding something? Reference a specific question or accusation they made.",
+                    "One of you is nervous about what the detective might find. Start a brief exchange about the safe and how it connects to something the detective asked about."
                 }
             },
             ["continuity"] = new InjectionCategory
@@ -105,9 +106,12 @@ public class NpcInjectionTriggerSystem : MonoBehaviour
                 isLocationBased = false,
                 prompts = new List<string>
                 {
-                    "Continue your current topic for one short back-and-forth when there is no new input, explicitly referencing the last unresolved point that was just raised (paraphrase only), then stop naturally.",
-                    "Resume an earlier topic as if it was ongoing, picking up from the last unresolved point (paraphrase only), without greeting or asking a question.",
-                    "Have one short check-in with each other about staying calm and thinking clearly, tied to the quiet moment that just happened, without mentioning the player."
+                    "The detective stepped away. Start a brief exchange about something specific they asked or said. Do they suspect one of you? What were they getting at?",
+                    "Start a brief exchange about whether the detective suspects you or the other person. Reference a specific question or look they gave. What did they mean by that?",
+                    "Start a brief exchange worrying about what the detective already knows. Reference something they asked about - do they know about the argument? The safe? Who was drunk?",
+                    "Start a brief exchange about the detective's questioning strategy. Are they trying to catch you in a lie? Reference something inconsistent that came up.",
+                    "Start a brief exchange processing the detective's questions. Pick one specific thing they asked about and discuss what you should have said or what you're worried about.",
+                    "Start a brief exchange comparing what you each told the detective. Did your stories match? Reference specific details they asked about."
                 }
             },
             ["self_directed"] = new InjectionCategory
@@ -118,10 +122,10 @@ public class NpcInjectionTriggerSystem : MonoBehaviour
                 isLocationBased = false,
                 prompts = new List<string>
                 {
-                    "Mutter to yourself something like 'Stay calm... just stay calm.' or 'Keep it together.' - a short self-reassurance about staying composed.",
-                    "Mutter to yourself something like 'I don't know what to think anymore...' or 'Nothing makes sense.' - expressing doubt and uncertainty.",
-                    "Mutter to yourself something like 'This tension is unbearable...' or 'Why does everything feel so heavy?' - commenting on the tense atmosphere.",
-                    "Mutter to yourself something like 'I should watch what I say...' or 'Careful now...' - reminding yourself to be cautious with words."
+                    "Mutter to yourself about something the detective asked. What did they mean? Why did they ask that specifically?",
+                    "Mutter to yourself about what the detective might find out. Reference something from the party or the investigation.",
+                    "Mutter to yourself about someone the detective asked about - Olivia, Chris, or the other suspect. What do they know?",
+                    "Mutter to yourself about something you said to the detective. Should you have said that? Will they figure it out?"
                 }
             }
         };
@@ -422,16 +426,12 @@ public class NpcInjectionTriggerSystem : MonoBehaviour
             if (triggerKitchen)
                 return ("kitchen_safe", "Kitchen");
         }
-        else
-        {
-            // Fallback triggers (always on) - randomly pick one
-            if (UnityEngine.Random.value > 0.5f)
-                return ("continuity", "Continuity");
-            else
-                return ("self_directed", "Self-Directed");
-        }
         
-        return (null, null);
+        // Fallback triggers (always on) - randomly pick one
+        if (UnityEngine.Random.value > 0.5f)
+            return ("continuity", "Continuity");
+        else
+            return ("self_directed", "Self-Directed");
     }
 
     #endregion

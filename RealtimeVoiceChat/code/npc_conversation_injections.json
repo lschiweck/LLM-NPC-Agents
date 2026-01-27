@@ -1,6 +1,6 @@
 {
-  "version": "1.0",
-  "description": "NPC-to-NPC conversation injection prompts based on player context/location",
+  "version": "2.0",
+  "description": "NPC-to-NPC conversation injection prompts - PLAYER-FOCUSED and contextually reactive",
   
   "timing": {
     "baseIntervalSeconds": 20,
@@ -11,6 +11,16 @@
     "description": "Timer starts AFTER NPCs finish talking. 20-40s between conversations."
   },
 
+  "globalRules": {
+    "description": "Rules that apply to ALL NPC conversations",
+    "rules": [
+      "CRITICAL: Your conversation MUST reference what the detective just asked or discussed. Pick a specific topic, word, or accusation from the recent conversation.",
+      "Do NOT have generic conversations. React to the detective's investigation.",
+      "If the detective asked about a person, discuss that person. If they asked about an object, discuss that object.",
+      "Your exchange should feel like a natural reaction to being questioned, not a scripted scene."
+    ]
+  },
+
   "injections": {
     "sudoku": {
       "id": "sudoku",
@@ -18,20 +28,20 @@
       "description": "Triggered when player is near the Sudoku puzzle in the living room",
       "prompts": [
         {
-          "id": "sudoku_patience",
-          "prompt": "Start a brief exchange about staying patient and looking for patterns in the Sudoku, explicitly anchored to the most recent relevant conversational cue (paraphrase only), without giving any actionable steps or numbers."
+          "id": "sudoku_detective_interest",
+          "prompt": "The detective seems interested in David's Sudoku. Start a brief exchange about why the detective is looking at it. Reference something specific the detective said or asked recently. Don't give solving advice - just react to their interest."
         },
         {
-          "id": "sudoku_no_rush",
-          "prompt": "Start a brief exchange about not rushing the Sudoku and avoiding forcing progress when nothing is clear, explicitly tied to the current tone in the last few turns (e.g., confidence vs hesitation), without giving any solving advice."
+          "id": "sudoku_david_memory",
+          "prompt": "React to what the detective has been asking. Start a brief exchange sharing a memory about David and his puzzle obsession. Tie it to whatever topic the detective was just discussing (whether it's about suspects, the party, or evidence)."
         },
         {
-          "id": "sudoku_stress",
-          "prompt": "Start a brief exchange about how stress affects focus on puzzles, grounded in the pacing or tension that just occurred in the conversation, keeping it general and not addressing the player directly."
+          "id": "sudoku_suspicious",
+          "prompt": "One of you finds the detective's focus on the Sudoku suspicious or interesting. Start a brief exchange about what the detective might be looking for, referencing their recent questions or accusations."
         },
         {
-          "id": "sudoku_overread",
-          "prompt": "Start a brief exchange about how people sometimes over-read meaning into small puzzle details, explicitly responding to the most recent strong wording or assumption that appeared in the conversation (paraphrase only), without giving any solving guidance."
+          "id": "sudoku_connection",
+          "prompt": "React to the detective's investigation. Start a brief exchange wondering if the Sudoku connects to something the detective asked about earlier (the safe? a person? the party events?)."
         }
       ]
     },
@@ -39,76 +49,80 @@
     "kitchen_safe": {
       "id": "kitchen_safe",
       "displayName": "Kitchen Safe",
-      "description": "Triggered when player is in the kitchen - NPCs discuss the safe even if player hasn't discovered it yet",
+      "description": "Triggered when player is in the kitchen - NPCs discuss the safe in context of the investigation",
       "prompts": [
         {
-          "id": "safe_unusual",
-          "prompt": "Start a brief exchange about a safe in a kitchen feeling unusual, explicitly anchored to the most recent conversational cue (paraphrase only), without guessing what is inside or why it is there."
+          "id": "safe_detective_looking",
+          "prompt": "The detective is in the kitchen. Start a brief exchange about why they're looking around there. Reference what they asked you about recently - are they suspicious of someone? Looking for something?"
         },
         {
-          "id": "safe_normal_vs_odd",
-          "prompt": "Start a brief exchange where one agent frames a kitchen safe as normal and the other frames it as odd, and have each framing mirror the other agent's most recent style (cautious vs definitive) from the last few turns, keeping it mild and non-accusatory."
+          "id": "safe_what_detective_knows",
+          "prompt": "Start a brief exchange wondering what the detective already knows about the safe. Connect it to their recent questions - did they ask about David's secrets? About who had access?"
         },
         {
-          "id": "safe_no_assume",
-          "prompt": "Start a brief exchange reminding each other not to assume meaning from the safe until it is opened, explicitly responding to the most recent assumption or strong implication made in the conversation (paraphrase only), without giving procedural instructions."
+          "id": "safe_after_questions",
+          "prompt": "React to being questioned. Start a brief exchange about the detective's investigation style - are they close to finding something? Reference a specific question or accusation they made."
         },
         {
-          "id": "safe_distraction",
-          "prompt": "Start a brief exchange about how unusual objects can pull attention away from the bigger picture, explicitly tied to whatever the conversation was focused on (paraphrase only), without introducing new facts."
+          "id": "safe_nervous",
+          "prompt": "One of you is nervous about what the detective might find. Start a brief exchange about the safe and how it connects to something the detective asked about (Olivia? Chris? the argument?)."
         }
       ]
     },
 
     "continuity": {
       "id": "continuity",
-      "displayName": "Conversation Continuity and Drift",
-      "description": "Triggered when player moves away or stops engaging - NPCs continue their conversation naturally",
+      "displayName": "Conversation Continuity - PLAYER FOCUSED",
+      "description": "Triggered when player moves away or stops engaging - NPCs discuss what the detective said",
       "prompts": [
         {
-          "id": "continue_topic",
-          "prompt": "Continue your current topic for one short back-and-forth when there is no new input, explicitly referencing the last unresolved point that was just raised (paraphrase only), then stop naturally."
+          "id": "continue_detective_said",
+          "prompt": "The detective stepped away. Start a brief exchange about something specific they asked or said. Do they suspect one of you? What were they getting at?"
         },
         {
-          "id": "interrupted_shift",
-          "prompt": "If the conversation is interrupted by a sudden topic shift, briefly reference what the shift cut off (paraphrase only) and finish with a neutral 'we'll leave it there' kind of tone, without asking questions."
+          "id": "detective_suspicion",
+          "prompt": "Start a brief exchange about whether the detective suspects you or the other person. Reference a specific question or look they gave. What did they mean by that?"
         },
         {
-          "id": "resume_earlier",
-          "prompt": "Resume an earlier topic as if it was ongoing when it gets brought up again later, picking up from the last unresolved point (paraphrase only), without greeting or asking a question."
+          "id": "detective_knows",
+          "prompt": "Start a brief exchange worrying about what the detective already knows. Reference something they asked about - do they know about the argument? The safe? Who was drunk?"
         },
         {
-          "id": "loop_acknowledge",
-          "prompt": "If the conversation starts looping or repeating itself, start a brief exchange acknowledging the repetition in a neutral way, anchored to the last repeated phrasing/idea (paraphrase only), without escalating or adding new information."
+          "id": "detective_strategy",
+          "prompt": "Start a brief exchange about the detective's questioning strategy. Are they trying to catch you in a lie? Reference something inconsistent that came up."
         },
         {
-          "id": "lull_checkin",
-          "prompt": "If there is a lull or silence, have one short check-in with each other about staying calm and thinking clearly, tied to the quiet moment that just happened, without mentioning the player."
+          "id": "process_questions",
+          "prompt": "Start a brief exchange processing the detective's questions. Pick one specific thing they asked about and discuss what you should have said or what you're worried about."
+        },
+        {
+          "id": "compare_stories",
+          "prompt": "Start a brief exchange comparing what you each told the detective. Did your stories match? Reference specific details they asked about."
         }
       ]
     },
 
     "self_directed": {
       "id": "self_directed",
-      "displayName": "Self-Directed Remarks",
-      "description": "Single NPC making a remark to themselves (monologue)",
+      "displayName": "Self-Directed Remarks - Post Investigation",
+      "description": "Single NPC making a remark to themselves about the investigation",
       "isMonologue": true,
       "prompts": [
         {
-          "id": "self_composed",
-          "prompt": "Mutter to yourself something like 'Stay calm... just stay calm.' or 'Keep it together.' - a short self-reassurance about staying composed."
+          "id": "self_detective_question",
+          "prompt": "Mutter to yourself about something the detective asked. What did they mean? Why did they ask that specifically?"
         },
         {
-          "id": "self_uncertainty",
-          "prompt": "Mutter to yourself something like 'I don't know what to think anymore...' or 'Nothing makes sense.' - expressing doubt and uncertainty."
+          "id": "self_worried",
+          "prompt": "Mutter to yourself about what the detective might find out. Reference something from the party or the investigation."
         },
         {
-          "id": "self_tension",
-          "prompt": "Mutter to yourself something like 'This tension is unbearable...' or 'Why does everything feel so heavy?' - commenting on the tense atmosphere."
+          "id": "self_suspicious",
+          "prompt": "Mutter to yourself about someone the detective asked about - Olivia, Chris, or the other suspect. What do they know?"
         },
         {
-          "id": "self_careful",
-          "prompt": "Mutter to yourself something like 'I should watch what I say...' or 'Careful now...' - reminding yourself to be cautious with words."
+          "id": "self_regret",
+          "prompt": "Mutter to yourself about something you said to the detective. Should you have said that? Will they figure it out?"
         }
       ]
     }

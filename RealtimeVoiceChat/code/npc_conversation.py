@@ -374,7 +374,8 @@ class NPCConversationOrchestrator:
         def build_turn_prompt() -> str:
             """
             Build a prompt for NPC-to-NPC turns that strongly discourages
-            screenplay-style multi-speaker output.
+            screenplay-style multi-speaker output and emphasizes referencing
+            player/detective conversations.
             """
             parts: List[str] = []
 
@@ -387,7 +388,7 @@ class NPCConversationOrchestrator:
                 parts.append(
                     "IMPORTANT RULES: Output ONLY what YOU say out loud. "
                     "One short sentence. No name prefixes. No stage directions. "
-                    "You are muttering to yourself."
+                    "You are muttering to yourself about the investigation."
                 )
                 parts.append(f"You are {speaker_id}.")
                 if context:
@@ -395,27 +396,28 @@ class NPCConversationOrchestrator:
                     parts.append(f"{context}")
                 else:
                     # Default fallback if no context
-                    parts.append("Mutter something to yourself about the situation.")
+                    parts.append("Mutter something about what the detective asked or what you're worried about.")
             else:
                 # Dialogue: two NPCs talking
                 parts.append(
-                    "IMPORTANT RULES (DO NOT SAY THESE OUT LOUD): "
+                    "CRITICAL RULES (DO NOT SAY THESE OUT LOUD): "
                     "Reply as ONE speaker only. Output ONLY what YOU say. "
                     "Do NOT write the other person's dialogue. "
                     "Do NOT include any name prefixes like 'Lisa:' or 'Paul:'. "
-                    "Keep it to 1–2 short sentences."
+                    "Keep it to 1–2 short sentences. "
+                    "MOST IMPORTANT: Reference something SPECIFIC from your recent conversation with the detective."
                 )
                 parts.append(f"You are {speaker_id}. You are talking to {listener_id}.")
 
                 if is_first_turn and context:
-                    parts.append(f"Start the conversation about: {context}")
+                    parts.append(f"Start the conversation: {context} Make sure to reference what the detective was asking about.")
 
                 if not is_first_turn and self.state.conversation_history:
                     last_turn = self.state.conversation_history[-1]
-                    parts.append(f'They just said: "{last_turn.message}"')
+                    parts.append(f'{listener_id} just said: "{last_turn.message}" - Reply naturally, staying on topic about the detective/investigation.')
 
                 if is_last_turn:
-                    parts.append("Wrap it up naturally in one short sentence.")
+                    parts.append("Wrap it up naturally in one short sentence about the detective or investigation.")
 
             return " ".join([p.strip() for p in parts if p and p.strip()])
         
@@ -552,6 +554,8 @@ class NPCConversationOrchestrator:
             
             # FIRST: Add context about what this NPC told the detective (player)
             # This ensures NPCs remember their player conversations when talking to each other
+            # AND provides specific topics to reference in NPC-to-NPC conversations
+            recent_detective_topics = []
             if hasattr(pipeline, 'history') and pipeline.history:
                 player_context_parts = []
                 for msg in pipeline.history[-8:]:  # Last 8 messages with player
@@ -559,11 +563,22 @@ class NPCConversationOrchestrator:
                         player_context_parts.append(f"You said: {msg['content']}")
                     else:
                         player_context_parts.append(f"Detective asked: {msg['content']}")
+                        # Extract key topics from detective questions for reference
+                        recent_detective_topics.append(msg['content'])
                 
                 if player_context_parts:
-                    player_summary = "[CONTEXT - Your recent conversation with the detective. Remember this and stay consistent:]\n" + "\n".join(player_context_parts)
+                    # Build a more directive context that emphasizes REFERENCING the detective's questions
+                    player_summary = (
+                        "[CRITICAL CONTEXT - The detective just questioned you. Your NPC conversation MUST reference their questions:]\n"
+                        + "\n".join(player_context_parts[-6:])  # Focus on most recent
+                    )
+                    if recent_detective_topics:
+                        # Add explicit instruction to reference specific topics
+                        last_topic = recent_detective_topics[-1] if recent_detective_topics else ""
+                        player_summary += f"\n\n[The detective's LAST QUESTION was: \"{last_topic[:100]}...\" - REFERENCE THIS in your conversation with {listener_id}]"
+                    
                     history.append({"role": "user", "content": player_summary})
-                    history.append({"role": "assistant", "content": "I remember what I told the detective and will stay consistent."})
+                    history.append({"role": "assistant", "content": f"Got it - I'll reference what the detective asked about when I talk to {listener_id}."})
             
             # THEN: Add recent NPC-to-NPC conversation turns as context
             for turn in self.state.conversation_history[-6:]:  # Last 6 turns for context
