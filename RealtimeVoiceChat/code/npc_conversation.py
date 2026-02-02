@@ -15,6 +15,7 @@ from typing import Optional, Callable, Dict, List, Any
 from enum import Enum
 
 from conversation_logger import get_conversation_logger
+from speech_pipeline_manager import GLOBAL_GENERATION_SEMAPHORE
 
 logger = logging.getLogger(__name__)
 
@@ -590,8 +591,8 @@ class NPCConversationOrchestrator:
             
             logger.info(f"🎭 History for {speaker_id}: {len(history)} messages")
             
-            # Generate response - run directly without semaphore
-            # NPC conversations run independently of player conversations
+            # Generate response - use global semaphore to avoid GPU contention
+            # with player speech generation and GameManager ticks.
             # Keep NPC-to-NPC turns short and snappy.
             # Ollama supports num_predict; OpenAI/LMStudio will ignore unknown options safely.
             full_response = ""
@@ -605,19 +606,37 @@ class NPCConversationOrchestrator:
                 stop_sequences = ["\n", f"{speaker_id}:"]
                 stop_sequences.append(f"{listener_id}:")
             
-            for chunk in pipeline.llm.generate(
-                text=prompt,
-                history=history,
-                use_system_prompt=True,
-                num_predict=90 if not is_monologue else 50,  # Shorter for monologues
-                temperature=0.8 if is_monologue else 0.7,  # Higher temp for monologues
-                stop=stop_sequences,
-            ):
-                # Check for interruption during generation
-                if self._stop_requested:
-                    logger.info(f"🎭 LLM generation interrupted for {speaker_id}")
+            # Acquire global generation lock to avoid GPU contention
+            acquired_lock = False
+            try:
+                # Try to acquire with timeout (5 seconds)
+                acquired_lock = GLOBAL_GENERATION_SEMAPHORE.acquire(timeout=5.0)
+                if not acquired_lock:
+                    logger.warning(f"🎭⚠️ Could not acquire generation lock for {speaker_id}, skipping turn")
                     return None
-                full_response += chunk
+                
+                logger.info(f"🎭🔒 Acquired generation lock for {speaker_id}")
+                
+                for chunk in pipeline.llm.generate(
+                    text=prompt,
+                    history=history,
+                    use_system_prompt=True,
+                    num_predict=90 if not is_monologue else 50,  # Shorter for monologues
+                    temperature=0.8 if is_monologue else 0.7,  # Higher temp for monologues
+                    stop=stop_sequences,
+                ):
+                    # Check for interruption during generation
+                    if self._stop_requested:
+                        logger.info(f"🎭 LLM generation interrupted for {speaker_id}")
+                        return None
+                    full_response += chunk
+            finally:
+                if acquired_lock:
+                    try:
+                        GLOBAL_GENERATION_SEMAPHORE.release()
+                        logger.info(f"🎭🔓 Released generation lock for {speaker_id}")
+                    except Exception:
+                        pass
             
             logger.info(f"🎭 LLM response for {speaker_id}: {full_response[:100]}...")
             

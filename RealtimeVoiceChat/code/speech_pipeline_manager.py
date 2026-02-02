@@ -6,6 +6,7 @@ import time
 import re
 from queue import Queue, Empty
 import sys
+import random
 
 # (Make sure real/mock imports are correct)
 from audio_module import AudioProcessor
@@ -465,7 +466,7 @@ class SpeechPipelineManager:
             return ""
         # Drop all-caps "instruction-like" fragments.
         letters = [ch for ch in c if ch.isalpha()]
-        if letters:
+        if len(letters) >= 3:
             upper_ratio = sum(1 for ch in letters if ch.isupper()) / max(1, len(letters))
             if upper_ratio >= 0.9 and len(c.strip()) <= 120:
                 return ""
@@ -1298,14 +1299,28 @@ class SpeechPipelineManager:
         
         # Then add the player conversation history
         # One-time introduction for first contact with the detective in this session.
-        # This keeps onboarding consistent without repeating introductions every turn.
-        if not self._introduced_to_player and not self.history:
-            combined.append({
-                "role": "user",
-                "content": "First contact in this session. Start your next reply with one natural sentence that introduces who you are (your name and relationship to David). Then answer normally."
-            })
-
-        combined.extend(self.history)
+        # IMPORTANT: We don't inject a separate message anymore - that caused the model to
+        # only address the intro and forget the player's actual question.
+        # Instead, we'll prepend an intro instruction to the player's FIRST message.
+        if not self._introduced_to_player and self.history:
+            # Find and modify the first user message to include intro instruction
+            modified_history = []
+            intro_added = False
+            intro_prefix = "[First contact - briefly introduce yourself (name + connection to David) then answer their question] "
+            
+            for msg in self.history:
+                if not intro_added and msg.get("role") == "user":
+                    # Prepend intro instruction to the first player message
+                    modified_msg = dict(msg)
+                    modified_msg["content"] = intro_prefix + msg["content"]
+                    modified_history.append(modified_msg)
+                    intro_added = True
+                else:
+                    modified_history.append(msg)
+            
+            combined.extend(modified_history)
+        else:
+            combined.extend(self.history)
         # IMPORTANT:
         # Do NOT inject director notes into the conversation history.
         # They already live at the TOP of the system prompt (high salience), and putting them

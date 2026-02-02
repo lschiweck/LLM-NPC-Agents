@@ -281,6 +281,14 @@ export OLLAMA_BASE_URL="http://127.0.0.1:11434"
 export DEFAULT_LLM_MODEL="llama3"
 ```
 
+**Windows CMD (set permanently):**
+
+```bat
+setx OLLAMA_BASE_URL "http://127.0.0.1:11434"
+setx DEFAULT_LLM_PROVIDER "ollama"
+setx DEFAULT_LLM_MODEL "llama3.2:3b"
+```
+
 ---
 
 ## Starting the Server

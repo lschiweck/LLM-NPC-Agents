@@ -67,6 +67,8 @@ class CharacterSession:
     tasks: List[asyncio.Task] = field(default_factory=list)
     upsampler: Optional[UpsampleOverlap] = None
     uses_shared_audio: bool = False
+    lisa_sudoku_injection_task: Optional[asyncio.Task] = None
+    lisa_sudoku_injection_done: bool = False
 
     def stop_connection(self):
         for task in self.tasks:
@@ -97,6 +99,9 @@ class CharacterSession:
 
     def shutdown(self):
         self.stop_connection()
+        if self.lisa_sudoku_injection_task and not self.lisa_sudoku_injection_task.done():
+            self.lisa_sudoku_injection_task.cancel()
+        self.lisa_sudoku_injection_task = None
         if self.pipeline:
             try:
                 self.pipeline.shutdown()
@@ -125,7 +130,7 @@ if sys.platform == "win32":
 #from handlerequests import LanguageProcessor
 #from audio_out import AudioOutProcessor
 from audio_in import AudioInputProcessor
-from speech_pipeline_manager import SpeechPipelineManager
+from speech_pipeline_manager import SpeechPipelineManager, GLOBAL_GENERATION_SEMAPHORE
 from game_manager import GameManager
 from npc_conversation import NPCConversationOrchestrator, NPCConversationConfig, ConversationTurn
 import uvicorn
@@ -434,6 +439,13 @@ async def lifespan(app: FastAPI):
                 else:
                     histories[char_id] = []
             return histories
+
+        def get_shared_llm():
+            sessions: Dict[str, CharacterSession] = app.state.CharacterSessions
+            for _, session in sessions.items():
+                if session.pipeline and getattr(session.pipeline, "llm", None):
+                    return session.pipeline.llm
+            return None
         
         def on_gm_inject(target: str, instruction: str):
             sessions: Dict[str, CharacterSession] = app.state.CharacterSessions
@@ -458,6 +470,8 @@ async def lifespan(app: FastAPI):
         
         app.state.GameManager.get_character_histories = get_character_histories
         app.state.GameManager.on_inject = on_gm_inject
+        app.state.GameManager.set_shared_llm_provider(get_shared_llm)
+        app.state.GameManager.set_generation_lock(GLOBAL_GENERATION_SEMAPHORE)
         # Broadcast callback
         async def broadcast_gm_state(state: Dict):
             clients = app.state.GameManagerClients
@@ -479,6 +493,9 @@ async def lifespan(app: FastAPI):
             _schedule_on_main_loop(broadcast_gm_state(state))
         
         app.state.GameManager.on_state_update = sync_broadcast_wrapper
+        app.state.GameManager.set_activity_state_provider(lambda: {
+            "last_player_audio_time": getattr(app.state, "ActiveConversationTargetTime", 0.0)
+        })
         logger.info("🎮 Step 2: Callbacks set OK")
         
         # Start Game Manager loop - uses asyncio.create_task internally
@@ -1902,6 +1919,36 @@ async def websocket_endpoint(ws: WebSocket):
 
     session.pipeline.on_partial_assistant_text = callbacks.on_partial_assistant_text
     session.pipeline.on_first_audio_callback = callbacks.on_first_audio_chunk
+
+    async def _schedule_lisa_sudoku_injection():
+        # Wait 4 minutes, then inject a subtle, natural directive for next reply.
+        await asyncio.sleep(240)
+        if session.lisa_sudoku_injection_done:
+            return
+
+        # If pipeline isn't ready yet, wait briefly (up to 60s) for it.
+        for _ in range(60):
+            if session.pipeline:
+                break
+            await asyncio.sleep(1)
+
+        if not session.pipeline:
+            logger.warning("🎮⚠️ Lisa sudoku injection skipped: no pipeline available")
+            return
+
+        note = (
+            "In your next reply to the detective, naturally bring up David's unfinished "
+            "Sudoku on the coffee table as something you noticed. Keep it casual, one "
+            "short sentence, and avoid sounding scripted."
+        )
+        session.pipeline.inject(note)
+        session.lisa_sudoku_injection_done = True
+        logger.info("🎮💉 Scheduled Lisa sudoku injection executed")
+
+    # Schedule the one-time Sudoku injection for Lisa after 4 minutes.
+    if session.character_id == "LisaParker" and not session.lisa_sudoku_injection_done:
+        if session.lisa_sudoku_injection_task is None or session.lisa_sudoku_injection_task.done():
+            session.lisa_sudoku_injection_task = asyncio.create_task(_schedule_lisa_sudoku_injection())
 
     tasks = [
         asyncio.create_task(process_incoming_data(ws, session)),

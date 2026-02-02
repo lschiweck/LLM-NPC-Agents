@@ -2,7 +2,6 @@ using System;
 using System.Collections;
 using System.Collections.Generic;
 using UnityEngine;
-using UnityEngine.Networking;
 
 /// <summary>
 /// NPC Injection Trigger System - Automatic NPC-to-NPC conversations.
@@ -13,9 +12,6 @@ using UnityEngine.Networking;
 /// - Timer starts AFTER NPCs finish talking (20-40s between conversations)
 /// - Suppressed when player is engaged (in NPC zone or speaking)
 /// 
-/// NEW: Fetches prompts from server at startup (npc_conversation_injections.json)
-/// Falls back to hardcoded prompts if server is unavailable.
-/// 
 /// Setup:
 /// 1. Add this to a GameObject in the scene
 /// 2. Create trigger zones with NpcInjectionTriggerZone component
@@ -25,9 +21,6 @@ public class NpcInjectionTriggerSystem : MonoBehaviour
 {
     public static NpcInjectionTriggerSystem Instance { get; private set; }
 
-    [Header("Server")]
-    [SerializeField] private string serverUrl = "http://127.0.0.1:8000";
-    
     [Header("Timing")]
     [SerializeField] private float baseIntervalSeconds = 20f;
     [SerializeField] private float randomOffsetMaxSeconds = 20f;
@@ -58,179 +51,22 @@ public class NpcInjectionTriggerSystem : MonoBehaviour
     // Timer
     private float nextTickTime = 0f;
     private Coroutine timerCoroutine;
-    
-    // Config loading state
-    private bool configLoaded = false;
-    private bool configLoadFailed = false;
 
     #region Injection Categories & Prompts
 
-    [Serializable]
-    private class InjectionPrompt
-    {
-        public string id;
-        public string text;
-    }
-    
-    [Serializable]
     private class InjectionCategory
     {
         public string id;
         public string name;
         public bool isMonologue;
         public bool isLocationBased;
-        public List<InjectionPrompt> prompts;
+        public List<string> prompts;
     }
 
     private Dictionary<string, InjectionCategory> categories;
 
-    #region JSON Parsing Classes
-    
-    [Serializable]
-    private class InjectionConfigJson
+    private void InitializeCategories()
     {
-        public string version;
-        public InjectionsJson injections;
-    }
-    
-    [Serializable]
-    private class InjectionsJson
-    {
-        public CategoryJson sudoku;
-        public CategoryJson kitchen_safe;
-        public CategoryJson continuity;
-        public CategoryJson self_directed;
-    }
-    
-    [Serializable]
-    private class CategoryJson
-    {
-        public string id;
-        public string displayName;
-        public bool isMonologue;
-        public PromptJson[] prompts;
-    }
-    
-    [Serializable]
-    private class PromptJson
-    {
-        public string id;
-        public string prompt;
-    }
-    
-    #endregion
-
-    private IEnumerator LoadConfigFromServer()
-    {
-        string url = $"{serverUrl}/npc_injection_config";
-        Log($"Fetching config from {url}...");
-        
-        using (UnityWebRequest request = UnityWebRequest.Get(url))
-        {
-            request.timeout = 5; // 5 second timeout
-            yield return request.SendWebRequest();
-            
-            if (request.result == UnityWebRequest.Result.Success)
-            {
-                try
-                {
-                    string json = request.downloadHandler.text;
-                    ParseConfig(json);
-                    configLoaded = true;
-                    Log($"✅ Config loaded from server (version {categories.Count} categories)");
-                }
-                catch (Exception ex)
-                {
-                    Debug.LogError($"[NpcInjection] Failed to parse config: {ex.Message}");
-                    configLoadFailed = true;
-                    InitializeFallbackCategories();
-                }
-            }
-            else
-            {
-                Debug.LogWarning($"[NpcInjection] Failed to fetch config: {request.error}. Using fallback.");
-                configLoadFailed = true;
-                InitializeFallbackCategories();
-            }
-        }
-    }
-    
-    private void ParseConfig(string json)
-    {
-        // Unity's JsonUtility doesn't handle nested objects well with dynamic keys
-        // So we parse manually using a simpler approach
-        categories = new Dictionary<string, InjectionCategory>();
-        
-        var config = JsonUtility.FromJson<InjectionConfigJson>(json);
-        
-        if (config?.injections != null)
-        {
-            // Sudoku
-            if (config.injections.sudoku != null)
-            {
-                categories["sudoku"] = ParseCategory(config.injections.sudoku, "Sudoku", false, true);
-            }
-            
-            // Kitchen
-            if (config.injections.kitchen_safe != null)
-            {
-                categories["kitchen_safe"] = ParseCategory(config.injections.kitchen_safe, "Kitchen", false, true);
-            }
-            
-            // Continuity
-            if (config.injections.continuity != null)
-            {
-                categories["continuity"] = ParseCategory(config.injections.continuity, "Continuity", false, false);
-            }
-            
-            // Self-directed
-            if (config.injections.self_directed != null)
-            {
-                categories["self_directed"] = ParseCategory(config.injections.self_directed, "Self-Directed", true, false);
-            }
-        }
-        
-        // Validate we got categories
-        if (categories.Count == 0)
-        {
-            throw new Exception("No categories parsed from config");
-        }
-        
-        // Log what we loaded
-        foreach (var cat in categories)
-        {
-            Log($"  Loaded: {cat.Key} ({cat.Value.prompts.Count} prompts, monologue={cat.Value.isMonologue})");
-        }
-    }
-    
-    private InjectionCategory ParseCategory(CategoryJson catJson, string displayName, bool isMonologue, bool isLocationBased)
-    {
-        var category = new InjectionCategory
-        {
-            id = catJson.id ?? displayName.ToLower(),
-            name = catJson.displayName ?? displayName,
-            isMonologue = catJson.isMonologue || isMonologue,
-            isLocationBased = isLocationBased,
-            prompts = new List<InjectionPrompt>()
-        };
-        
-        if (catJson.prompts != null)
-        {
-            foreach (var p in catJson.prompts)
-            {
-                if (!string.IsNullOrEmpty(p.prompt))
-                {
-                    category.prompts.Add(new InjectionPrompt { id = p.id, text = p.prompt });
-                }
-            }
-        }
-        
-        return category;
-    }
-
-    private void InitializeFallbackCategories()
-    {
-        Log("Using FALLBACK hardcoded prompts");
         categories = new Dictionary<string, InjectionCategory>
         {
             ["sudoku"] = new InjectionCategory
@@ -239,12 +75,12 @@ public class NpcInjectionTriggerSystem : MonoBehaviour
                 name = "Sudoku",
                 isMonologue = false,
                 isLocationBased = true,
-                prompts = new List<InjectionPrompt>
+                prompts = new List<string>
                 {
-                    new InjectionPrompt { id = "sudoku_detective_interest", text = "The detective seems interested in David's Sudoku. Start a brief exchange about why the detective is looking at it. Reference something specific the detective said or asked recently. Don't give solving advice - just react to their interest." },
-                    new InjectionPrompt { id = "sudoku_david_memory", text = "React to what the detective has been asking. Start a brief exchange sharing a memory about David and his puzzle obsession. Tie it to whatever topic the detective was just discussing." },
-                    new InjectionPrompt { id = "sudoku_suspicious", text = "One of you finds the detective's focus on the Sudoku suspicious or interesting. Start a brief exchange about what the detective might be looking for, referencing their recent questions." },
-                    new InjectionPrompt { id = "sudoku_connection", text = "React to the detective's investigation. Start a brief exchange wondering if the Sudoku connects to something the detective asked about earlier." }
+                    "Start a brief exchange about staying patient and looking for patterns in the Sudoku, explicitly anchored to the most recent relevant conversational cue (paraphrase only), without giving any actionable steps or numbers.",
+                    "Start a brief exchange about not rushing the Sudoku and avoiding forcing progress when nothing is clear, explicitly tied to the current tone in the last few turns, without giving any solving advice.",
+                    "Start a brief exchange about how stress affects focus on puzzles, grounded in the pacing or tension that just occurred in the conversation, keeping it general and not addressing the player directly.",
+                    "Start a brief exchange about how people sometimes over-read meaning into small puzzle details, explicitly responding to the most recent strong wording or assumption (paraphrase only), without giving any solving guidance."
                 }
             },
             ["kitchen_safe"] = new InjectionCategory
@@ -253,12 +89,12 @@ public class NpcInjectionTriggerSystem : MonoBehaviour
                 name = "Kitchen",
                 isMonologue = false,
                 isLocationBased = true,
-                prompts = new List<InjectionPrompt>
+                prompts = new List<string>
                 {
-                    new InjectionPrompt { id = "safe_detective_looking", text = "The detective is in the kitchen. Start a brief exchange about why they're looking around there. Reference what they asked you about recently - are they suspicious of someone? Looking for something?" },
-                    new InjectionPrompt { id = "safe_what_detective_knows", text = "Start a brief exchange wondering what the detective already knows about the safe. Connect it to their recent questions - did they ask about David's secrets? About who had access?" },
-                    new InjectionPrompt { id = "safe_after_questions", text = "React to being questioned. Start a brief exchange about the detective's investigation style - are they close to finding something? Reference a specific question or accusation they made." },
-                    new InjectionPrompt { id = "safe_nervous", text = "One of you is nervous about what the detective might find. Start a brief exchange about the safe and how it connects to something the detective asked about." }
+                    "Start a brief exchange about a safe in a kitchen feeling unusual, explicitly anchored to the most recent conversational cue (paraphrase only), without guessing what is inside or why it is there.",
+                    "Start a brief exchange where one agent frames a kitchen safe as normal and the other frames it as odd, keeping it mild and non-accusatory.",
+                    "Start a brief exchange reminding each other not to assume meaning from the safe until it is opened, without giving procedural instructions.",
+                    "Start a brief exchange about how unusual objects can pull attention away from the bigger picture, without introducing new facts."
                 }
             },
             ["continuity"] = new InjectionCategory
@@ -267,14 +103,11 @@ public class NpcInjectionTriggerSystem : MonoBehaviour
                 name = "Continuity",
                 isMonologue = false,
                 isLocationBased = false,
-                prompts = new List<InjectionPrompt>
+                prompts = new List<string>
                 {
-                    new InjectionPrompt { id = "continue_detective_said", text = "The detective stepped away. Start a brief exchange about something specific they asked or said. Do they suspect one of you? What were they getting at?" },
-                    new InjectionPrompt { id = "detective_suspicion", text = "Start a brief exchange about whether the detective suspects you or the other person. Reference a specific question or look they gave. What did they mean by that?" },
-                    new InjectionPrompt { id = "detective_knows", text = "Start a brief exchange worrying about what the detective already knows. Reference something they asked about - do they know about the argument? The safe? Who was drunk?" },
-                    new InjectionPrompt { id = "detective_strategy", text = "Start a brief exchange about the detective's questioning strategy. Are they trying to catch you in a lie? Reference something inconsistent that came up." },
-                    new InjectionPrompt { id = "process_questions", text = "Start a brief exchange processing the detective's questions. Pick one specific thing they asked about and discuss what you should have said or what you're worried about." },
-                    new InjectionPrompt { id = "compare_stories", text = "Start a brief exchange comparing what you each told the detective. Did your stories match? Reference specific details they asked about." }
+                    "Continue your current topic for one short back-and-forth when there is no new input, explicitly referencing the last unresolved point that was just raised (paraphrase only), then stop naturally.",
+                    "Resume an earlier topic as if it was ongoing, picking up from the last unresolved point (paraphrase only), without greeting or asking a question.",
+                    "Have one short check-in with each other about staying calm and thinking clearly, tied to the quiet moment that just happened, without mentioning the player."
                 }
             },
             ["self_directed"] = new InjectionCategory
@@ -283,12 +116,12 @@ public class NpcInjectionTriggerSystem : MonoBehaviour
                 name = "Self-Directed",
                 isMonologue = true,
                 isLocationBased = false,
-                prompts = new List<InjectionPrompt>
+                prompts = new List<string>
                 {
-                    new InjectionPrompt { id = "self_detective_question", text = "Mutter to yourself about something the detective asked. What did they mean? Why did they ask that specifically?" },
-                    new InjectionPrompt { id = "self_worried", text = "Mutter to yourself about what the detective might find out. Reference something from the party or the investigation." },
-                    new InjectionPrompt { id = "self_suspicious", text = "Mutter to yourself about someone the detective asked about - Olivia, Chris, or the other suspect. What do they know?" },
-                    new InjectionPrompt { id = "self_regret", text = "Mutter to yourself about something you said to the detective. Should you have said that? Will they figure it out?" }
+                    "Mutter to yourself something like 'Stay calm... just stay calm.' or 'Keep it together.' - a short self-reassurance about staying composed.",
+                    "Mutter to yourself something like 'I don't know what to think anymore...' or 'Nothing makes sense.' - expressing doubt and uncertainty.",
+                    "Mutter to yourself something like 'This tension is unbearable...' or 'Why does everything feel so heavy?' - commenting on the tense atmosphere.",
+                    "Mutter to yourself something like 'I should watch what I say...' or 'Careful now...' - reminding yourself to be cautious with words."
                 }
             }
         };
@@ -307,6 +140,8 @@ public class NpcInjectionTriggerSystem : MonoBehaviour
         }
         Instance = this;
         DontDestroyOnLoad(gameObject);
+        
+        InitializeCategories();
     }
 
     private void Start()
@@ -322,25 +157,9 @@ public class NpcInjectionTriggerSystem : MonoBehaviour
             npcController.OnConversationStarted.AddListener(OnNpcConversationStarted);
         }
         
-        Log("System initializing - loading config from server...");
-        
-        // Load config from server, then start the system
-        StartCoroutine(InitializeAndStart());
-    }
-    
-    private IEnumerator InitializeAndStart()
-    {
-        // Try to load config from server
-        yield return StartCoroutine(LoadConfigFromServer());
-        
         Log("System initialized - Auto-injection ACTIVE");
         Log("Fallback triggers (Continuity, Self-Directed) are ALWAYS ON");
         Log("Location triggers (Sudoku, Kitchen) override fallbacks when active");
-        
-        if (configLoadFailed)
-        {
-            Log("⚠️ Using FALLBACK prompts (server unavailable)");
-        }
         
         // Start the injection loop
         StartTimer();
@@ -442,15 +261,6 @@ public class NpcInjectionTriggerSystem : MonoBehaviour
         playerEngagedUntil = 0f;
         Log("Engagement reset");
     }
-    
-    /// <summary>
-    /// Reload config from server at runtime.
-    /// </summary>
-    public void ReloadConfig()
-    {
-        Log("Reloading config from server...");
-        StartCoroutine(LoadConfigFromServer());
-    }
 
     #endregion
 
@@ -501,7 +311,6 @@ public class NpcInjectionTriggerSystem : MonoBehaviour
     }
     
     private string lastFiredTrigger = "";
-    private string lastFiredPromptId = "";
 
     #endregion
 
@@ -518,21 +327,27 @@ public class NpcInjectionTriggerSystem : MonoBehaviour
 
     private IEnumerator InjectionTimerCoroutine()
     {
-        // Wait for config to load if not ready
-        while (categories == null)
-        {
-            yield return new WaitForSeconds(0.5f);
-        }
-        
         // Calculate wait time
         float waitTime = baseIntervalSeconds + UnityEngine.Random.Range(0f, randomOffsetMaxSeconds);
         nextTickTime = Time.time + waitTime;
+        Log($"Next tick in {waitTime:F1}s");
         
         yield return new WaitForSeconds(waitTime);
+        
+        // --- TICK ---
+        Log("--- TICK ---");
         
         // Check if we can inject
         if (!CanInject())
         {
+            if (playerInNpcZone)
+                Log("Skipped: player in NPC zone");
+            else if (Time.time < playerEngagedUntil)
+                Log($"Skipped: player engaged ({playerEngagedUntil - Time.time:F1}s remaining)");
+            else
+                Log("Skipped: engagement");
+            
+            // Reschedule
             StartTimer();
             yield break;
         }
@@ -540,6 +355,7 @@ public class NpcInjectionTriggerSystem : MonoBehaviour
         // Check if conversation is running
         if (npcConversationRunning || (NpcConversationController.Instance?.IsConversationRunning ?? false))
         {
+            Log("Skipped: conversation running");
             StartTimer();
             yield break;
         }
@@ -549,10 +365,12 @@ public class NpcInjectionTriggerSystem : MonoBehaviour
         
         if (categoryId != null)
         {
+            Log($"🔥 FIRING: {categoryName}");
             bool success = ExecuteInjection(categoryId);
             
             if (success)
             {
+                Log("Started! Waiting for conversation to end...");
                 waitingForConversationEnd = true;
                 // Don't restart timer - wait for conversation to end
                 
@@ -561,11 +379,13 @@ public class NpcInjectionTriggerSystem : MonoBehaviour
             }
             else
             {
+                Log("Injection failed!");
                 StartTimer();
             }
         }
         else
         {
+            Log("No triggers ready");
             StartTimer();
         }
     }
@@ -602,12 +422,16 @@ public class NpcInjectionTriggerSystem : MonoBehaviour
             if (triggerKitchen)
                 return ("kitchen_safe", "Kitchen");
         }
-        
-        // Fallback triggers (always on) - randomly pick one
-        if (UnityEngine.Random.value > 0.5f)
-            return ("continuity", "Continuity");
         else
-            return ("self_directed", "Self-Directed");
+        {
+            // Fallback triggers (always on) - randomly pick one
+            if (UnityEngine.Random.value > 0.5f)
+                return ("continuity", "Continuity");
+            else
+                return ("self_directed", "Self-Directed");
+        }
+        
+        return (null, null);
     }
 
     #endregion
@@ -628,23 +452,14 @@ public class NpcInjectionTriggerSystem : MonoBehaviour
             return false;
         }
         
-        if (categories == null || !categories.TryGetValue(categoryId, out var category))
+        if (!categories.TryGetValue(categoryId, out var category))
         {
             Debug.LogError($"[NpcInjection] Unknown category: {categoryId}");
             return false;
         }
         
-        if (category.prompts == null || category.prompts.Count == 0)
-        {
-            Debug.LogError($"[NpcInjection] No prompts for category: {categoryId}");
-            return false;
-        }
-        
         // Get random prompt
-        int promptIndex = UnityEngine.Random.Range(0, category.prompts.Count);
-        var selectedPrompt = category.prompts[promptIndex];
-        string promptId = selectedPrompt.id ?? $"{categoryId}_{promptIndex}";
-        string promptText = selectedPrompt.text;
+        string prompt = category.prompts[UnityEngine.Random.Range(0, category.prompts.Count)];
         
         // Get turns (2-4 for dialogue, 1 for monologue)
         int turns = category.isMonologue ? 1 : UnityEngine.Random.Range(2, 5);
@@ -653,23 +468,22 @@ public class NpcInjectionTriggerSystem : MonoBehaviour
         string npc1 = npc1Id;
         string npc2 = category.isMonologue ? "" : npc2Id;
         
-        Log($"🔥 {promptId} | {turns} turns | {npc1}{(string.IsNullOrEmpty(npc2) ? "" : " <-> " + npc2)}");
+        Log($"Starting: {categoryId} ({(category.isMonologue ? "monologue" : turns + " turns")})");
         
         // Track for end logging
         lastFiredTrigger = categoryId;
-        lastFiredPromptId = promptId;
         
-        // Log to analytics file (use promptId for cleaner logs)
+        // Log to analytics file
         if (PlayerInteractionLogger.Instance != null)
         {
-            PlayerInteractionLogger.Instance.LogNpcConversationStart(npc1, npc2, promptId, promptText);
+            PlayerInteractionLogger.Instance.LogNpcConversationStart(npc1, npc2, categoryId, prompt);
         }
         else
         {
             Debug.LogWarning("[NpcInjection] PlayerInteractionLogger not found! Analytics not recorded.");
         }
         
-        npcController.StartConversation(npc1, npc2, turns, promptText);
+        npcController.StartConversation(npc1, npc2, turns, prompt);
         return true;
     }
 
@@ -690,8 +504,7 @@ public class NpcInjectionTriggerSystem : MonoBehaviour
         while (true)
         {
             yield return new WaitForSeconds(periodicStatusLogInterval);
-            string configStatus = configLoaded ? "server" : (configLoadFailed ? "fallback" : "loading");
-            Debug.Log($"[NpcInjection] 📊 STATUS: Config={configStatus}, Sudoku={triggerSudoku}, Kitchen={triggerKitchen}, InNpcZone={playerInNpcZone}, Engaged={(Time.time < playerEngagedUntil ? $"YES ({playerEngagedUntil - Time.time:F0}s)" : "NO")}");
+            Debug.Log($"[NpcInjection] 📊 STATUS: Sudoku={triggerSudoku}, Kitchen={triggerKitchen}, InNpcZone={playerInNpcZone}, Engaged={(Time.time < playerEngagedUntil ? $"YES ({playerEngagedUntil - Time.time:F0}s)" : "NO")}");
         }
     }
 
@@ -718,23 +531,6 @@ public class NpcInjectionTriggerSystem : MonoBehaviour
             status = $"{timeRemaining:F0}s ({readyCount} ready" + (skipCount > 0 ? $", {skipCount} skip" : "") + ")";
         
         return status;
-    }
-    
-    /// <summary>
-    /// Check if config was loaded from server (vs fallback).
-    /// </summary>
-    public bool IsConfigFromServer => configLoaded && !configLoadFailed;
-    
-    /// <summary>
-    /// Get the current prompt count for a category.
-    /// </summary>
-    public int GetPromptCount(string categoryId)
-    {
-        if (categories != null && categories.TryGetValue(categoryId, out var cat))
-        {
-            return cat.prompts?.Count ?? 0;
-        }
-        return 0;
     }
 
     #endregion

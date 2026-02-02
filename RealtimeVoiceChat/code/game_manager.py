@@ -57,7 +57,13 @@ class GameManager:
         self.config = self._load_config()
         self.state = GameManagerState(enabled=self.config.get("enabled", False))
         
-        self.llm: Optional[LLM] = None
+        # Shared LLM provider (set by server.py). This avoids creating a new LLM instance.
+        self.get_shared_llm: Optional[Callable[[], Optional[LLM]]] = None
+        # Optional generation lock (e.g., GLOBAL_GENERATION_SEMAPHORE) to avoid overlap.
+        self._generation_lock: Optional[Any] = None
+        # Optional activity state provider (set by server.py) to avoid running during player speech.
+        self.get_activity_state: Optional[Callable[[], Dict[str, Any]]] = None
+        self._system_prompt: str = ""
         self._task: Optional[asyncio.Task] = None
         self._shutdown_event = asyncio.Event()
         
@@ -71,7 +77,7 @@ class GameManager:
         self.on_state_update: Optional[Callable[[Dict], None]] = None
         
         if self.state.enabled:
-            self._init_llm()
+            self._rebuild_system_prompt()
             logger.info("🎮 Game Manager initialized (enabled)")
         else:
             logger.info("🎮 Game Manager initialized (disabled)")
@@ -99,35 +105,24 @@ class GameManager:
             logger.error(f"🎮💥 Failed to load config: {e}")
             return {"enabled": False}
     
-    def _init_llm(self):
-        """Initialize the LLM for the game manager using 3-layer prompt architecture."""
-        try:
-            # Build system prompt from 3-layer architecture
-            # Layer 1 (Framework) is in prompt_layers.py
-            # Layer 2 (Behavior) and Layer 3 (Story Context) come from config
-            behavior = self.config.get("behavior", "")
-            story_context = self.config.get("story_context", "")
-            
-            # Legacy support: if old "system_prompt" key exists, use it directly
-            if "system_prompt" in self.config and not behavior and not story_context:
-                system_prompt = self.config.get("system_prompt", "You are a game master.")
-                logger.info("🎮📄 Using legacy system_prompt from config")
-            else:
-                system_prompt = build_game_manager_prompt(
-                    behavior=behavior,
-                    story_context=story_context
-                )
-                logger.info("🎮📄 Built system prompt from 3-layer architecture")
-            
-            self.llm = LLM(
-                backend=self.config.get("llm_provider", "ollama"),
-                model=self.config.get("llm_model", "llama3"),
-                system_prompt=system_prompt,
+    def _rebuild_system_prompt(self):
+        """Build the Game Manager system prompt (used with shared LLM)."""
+        # Build system prompt from 3-layer architecture
+        # Layer 1 (Framework) is in prompt_layers.py
+        # Layer 2 (Behavior) and Layer 3 (Story Context) come from config
+        behavior = self.config.get("behavior", "")
+        story_context = self.config.get("story_context", "")
+
+        # Legacy support: if old "system_prompt" key exists, use it directly
+        if "system_prompt" in self.config and not behavior and not story_context:
+            self._system_prompt = self.config.get("system_prompt", "You are a game master.")
+            logger.info("🎮📄 Using legacy system_prompt from config")
+        else:
+            self._system_prompt = build_game_manager_prompt(
+                behavior=behavior,
+                story_context=story_context
             )
-            logger.info(f"🎮🧠 Game Manager LLM initialized: {self.config.get('llm_model')}")
-        except Exception as e:
-            logger.error(f"🎮💥 Failed to initialize LLM: {e}")
-            self.state.enabled = False
+            logger.info("🎮📄 Built system prompt from 3-layer architecture")
     
     def reload_config(self):
         """Reload configuration from file."""
@@ -136,9 +131,30 @@ class GameManager:
         self.state.enabled = self.config.get("enabled", False)
         
         if self.state.enabled and not was_enabled:
-            self._init_llm()
+            self._rebuild_system_prompt()
         
         logger.info(f"🎮🔄 Config reloaded. Enabled: {self.state.enabled}")
+
+    def set_shared_llm_provider(self, provider: Callable[[], Optional[LLM]]):
+        """Provide a shared LLM instance (e.g., from a character pipeline)."""
+        self.get_shared_llm = provider
+
+    def set_generation_lock(self, lock: Any):
+        """Provide a generation lock to avoid overlapping LLM usage."""
+        self._generation_lock = lock
+
+    def set_activity_state_provider(self, provider: Callable[[], Dict[str, Any]]):
+        """Provide activity info (e.g., last player audio time)."""
+        self.get_activity_state = provider
+
+    def _get_shared_llm(self) -> Optional[LLM]:
+        if not self.get_shared_llm:
+            return None
+        try:
+            return self.get_shared_llm()
+        except Exception as e:
+            logger.warning(f"🎮⚠️ Shared LLM provider failed: {e}")
+            return None
     
     def get_state_for_ui(self) -> Dict[str, Any]:
         """Get current state formatted for the UI."""
@@ -178,6 +194,14 @@ class GameManager:
     def _build_prompt(self, character_histories: Dict[str, List[Dict]]) -> str:
         """Build the per-tick prompt for the Game Manager LLM (not the system prompt)."""
         known_characters = self.config.get("known_characters", [])
+        max_messages_per_char = int(self.config.get("max_messages_per_char", 6))
+        max_chars_per_message = int(self.config.get("max_chars_per_message", 200))
+
+        def _clip(text: str) -> str:
+            t = (text or "").strip()
+            if len(t) <= max_chars_per_message:
+                return t
+            return t[: max_chars_per_message - 3].rstrip() + "..."
         
         prompt_parts = [
             "=== CURRENT STATUS ===",
@@ -200,9 +224,9 @@ class GameManager:
             if not history:
                 prompt_parts.append("(No conversation yet)")
             else:
-                for msg in history[-20:]:  # Last 20 messages per character
+                for msg in history[-max_messages_per_char:]:
                     role = msg.get("role", "unknown")
-                    content = msg.get("content", "")
+                    content = _clip(msg.get("content", ""))
                     if role == "user":
                         prompt_parts.append(f"PLAYER: {content}")
                     elif role == "assistant":
@@ -268,12 +292,29 @@ class GameManager:
     
     async def _tick(self):
         """Execute a single tick of the Game Manager."""
-        if not self.state.enabled or self.llm is None:
+        if not self.state.enabled:
             return
         
         if self.get_character_histories is None:
             logger.warning("🎮⚠️ No character history callback set, skipping tick")
             return
+
+        shared_llm = self._get_shared_llm()
+        if shared_llm is None:
+            logger.warning("🎮⚠️ No shared LLM available, skipping tick")
+            return
+
+        # Skip if player was active recently (keep VR smooth).
+        if self.get_activity_state:
+            try:
+                activity = self.get_activity_state() or {}
+                last_player_time = float(activity.get("last_player_audio_time", 0.0) or 0.0)
+                min_idle = float(self.config.get("min_idle_seconds", 8.0))
+                if last_player_time > 0 and (time.time() - last_player_time) < min_idle:
+                    logger.info("🎮⏳ Skipping tick: player recently active")
+                    return
+            except Exception as e:
+                logger.warning(f"🎮⚠️ Failed to read activity state: {e}")
         
         self.state.is_processing = True
         self._broadcast_state()
@@ -291,11 +332,25 @@ class GameManager:
             def blocking_generate():
                 """Run LLM generation in a thread (it's synchronous/blocking)."""
                 response = ""
-                for chunk in self.llm.generate(text=prompt, history=None, use_system_prompt=True):
+                history = [{"role": "system", "content": self._system_prompt}]
+                for chunk in shared_llm.generate(
+                    text=prompt,
+                    history=history,
+                    use_system_prompt=False,
+                    num_predict=int(self.config.get("num_predict", 60)),
+                    temperature=float(self.config.get("temperature", 0.4))
+                ):
                     response += chunk
                 return response
             
+            acquired_lock = False
             try:
+                if self._generation_lock is not None:
+                    acquired_lock = self._generation_lock.acquire(blocking=False)
+                    if not acquired_lock:
+                        logger.info("🎮⏳ Skipping tick: generation lock busy")
+                        return
+
                 # Run in thread pool - doesn't block the event loop!
                 full_response = await asyncio.to_thread(blocking_generate)
             except Exception as e:
@@ -303,6 +358,12 @@ class GameManager:
                 self.state.is_processing = False
                 self._broadcast_state()
                 return
+            finally:
+                if acquired_lock and self._generation_lock is not None:
+                    try:
+                        self._generation_lock.release()
+                    except Exception:
+                        pass
             
             logger.info(f"🎮📝 Game Manager response:\n{full_response}")
             
