@@ -19,6 +19,7 @@
     "orpheus_model": "orpheus-3b-0.1-ft-Q8_0-GGUF/orpheus-3b-0.1-ft-q8_0.gguf",
     "llm_provider": "ollama",
     "llm_model": "llama3.2:3b",
+    "llm_num_ctx": 65536,
     "no_think": false,
     "language": "en"
   },

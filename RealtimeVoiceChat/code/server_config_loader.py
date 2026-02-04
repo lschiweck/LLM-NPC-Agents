@@ -51,6 +51,7 @@ class DefaultSettings:
     orpheus_model: str = "orpheus-3b-0.1-ft-Q8_0-GGUF/orpheus-3b-0.1-ft-q8_0.gguf"
     llm_provider: str = "ollama"
     llm_model: str = "llama3"
+    llm_num_ctx: Optional[int] = None
     no_think: bool = False
     language: str = "en"
 

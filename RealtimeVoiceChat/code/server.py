@@ -49,6 +49,7 @@ DEFAULT_ORPHEUS_MODEL = os.getenv(
 )
 DEFAULT_LLM_PROVIDER = os.getenv("DEFAULT_LLM_PROVIDER", _server_config.defaults.llm_provider)
 DEFAULT_LLM_MODEL = os.getenv("DEFAULT_LLM_MODEL", _server_config.defaults.llm_model)
+DEFAULT_NUM_CTX = _server_config.defaults.llm_num_ctx
 DEFAULT_NO_THINK = os.getenv("DEFAULT_NO_THINK", str(_server_config.defaults.no_think)).lower() == "true"
 LANGUAGE = _server_config.defaults.language
 
@@ -385,6 +386,7 @@ async def lifespan(app: FastAPI):
                         llm_model=char_config.get("llm_model", DEFAULT_LLM_MODEL),
                         no_think=char_config.get("no_think", DEFAULT_NO_THINK),
                         orpheus_model=char_config.get("orpheus_model", DEFAULT_ORPHEUS_MODEL),
+                        num_ctx=char_config.get("llm_num_ctx", DEFAULT_NUM_CTX),
                         personality=personality,
                         game_knowledge=game_knowledge,
                         system_prompt_override=system_prompt,
@@ -472,6 +474,20 @@ async def lifespan(app: FastAPI):
         app.state.GameManager.on_inject = on_gm_inject
         app.state.GameManager.set_shared_llm_provider(get_shared_llm)
         app.state.GameManager.set_generation_lock(GLOBAL_GENERATION_SEMAPHORE)
+        
+        # Tick complete callback for conversation logging
+        def on_gm_tick_complete(raw_response: str, thinking: str, actions: List[Dict[str, str]], processing_time_ms: float):
+            conv_logger = get_conversation_logger()
+            if conv_logger:
+                conv_logger.log_game_manager_tick(
+                    thinking=thinking,
+                    actions=actions,
+                    processing_time_ms=processing_time_ms,
+                    raw_response=raw_response
+                )
+        
+        app.state.GameManager.on_tick_complete = on_gm_tick_complete
+        
         # Broadcast callback
         async def broadcast_gm_state(state: Dict):
             clients = app.state.GameManagerClients
@@ -1861,6 +1877,7 @@ async def websocket_endpoint(ws: WebSocket):
             llm_model=session.config.get("llm_model", DEFAULT_LLM_MODEL),
             no_think=session.config.get("no_think", DEFAULT_NO_THINK),
             orpheus_model=session.config.get("orpheus_model", DEFAULT_ORPHEUS_MODEL),
+            num_ctx=session.config.get("llm_num_ctx", DEFAULT_NUM_CTX),
             personality=personality,
             game_knowledge=game_knowledge,
             system_prompt_override=system_prompt,

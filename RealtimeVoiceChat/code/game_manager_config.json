@@ -7,7 +7,7 @@
   "min_idle_seconds": 20,
   "max_messages_per_char": 6,
   "max_chars_per_message": 200,
-  "num_predict": 60,
+  "num_predict": 500,
   "temperature": 0.4,
   "behavior": "• Only inject when conversation needs a nudge\n• Inject emotions or revelations, not dialogue\n• NPCs are suspects - never tell them to comfort the detective\n• Prefer ACTION: NONE if things are flowing well",
   "story_context": "CANON: Grounded modern murder mystery. David Russell is dead after a house party; the player is the detective investigating. Lisa Parker (childhood friend) and Paul Adams (university friend) are suspects being questioned. The party involved drinks, a spilled wine mess, and a tense moment between David and Olivia near the kitchen; David hovered around a safe and a Sudoku note. Key clues/locations: the kitchen and a safe. David loved puzzles (especially Sudoku). Olivia (ex) and Chris (guest) are other suspects (may not be present). TONE: keep it tight and coherent; stay on-topic; avoid meme-y trash talk, avoid sexual content; minimal mild swearing at most. Do not invent new suspects/locations or supernatural explanations; if uncertain, say so."

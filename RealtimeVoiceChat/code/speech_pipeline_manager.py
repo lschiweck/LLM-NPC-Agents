@@ -133,6 +133,7 @@ class SpeechPipelineManager:
             llm_model: str = "hf.co/bartowski/huihui-ai_Mistral-Small-24B-Instruct-2501-abliterated-GGUF:Q4_K_M",
             no_think: bool = False,
             orpheus_model: str = "orpheus-3b-0.1-ft-Q8_0-GGUF/orpheus-3b-0.1-ft-q8_0.gguf",
+            num_ctx: Optional[int] = None,
             *,
             # 3-Layer Prompt System (preferred)
             personality: Optional[str] = None,
@@ -210,6 +211,7 @@ class SpeechPipelineManager:
             model=self.llm_model,
             system_prompt=self.system_prompt,
             no_think=no_think,
+            num_ctx=num_ctx,
         )
         self.llm.prewarm()
         self.llm_inference_time = self.llm.measure_inference_time()

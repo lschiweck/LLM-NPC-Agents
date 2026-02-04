@@ -200,6 +200,7 @@ class LLM:
         api_key: Optional[str] = None,
         base_url: Optional[str] = None,
         no_think: bool = False,
+        num_ctx: Optional[int] = None,
     ):
         """
         Initializes the LLM interface for a specific backend and model.
@@ -231,6 +232,7 @@ class LLM:
         self._api_key = api_key
         self._base_url = base_url
         self.no_think = no_think # Not used yet, but kept for future use
+        self.num_ctx = num_ctx  # Context window size for Ollama
 
         self.client: Optional[OpenAI] = None
         self.ollama_session: Optional[Session] = None
@@ -690,10 +692,12 @@ class LLM:
                 # Connection check (and potential ps fallback) happened in lazy_init
 
                 ollama_api_url = f"{self.effective_ollama_url}/api/chat"
-                valid_options = {"temperature", "top_k", "top_p", "num_predict", "stop"}
+                valid_options = {"temperature", "top_k", "top_p", "num_predict", "stop", "num_ctx"}
                 options = {k: v for k, v in kwargs.items() if k in valid_options}
                 if 'temperature' not in options:
                     options['temperature'] = 0.7
+                if self.num_ctx and 'num_ctx' not in options:
+                    options['num_ctx'] = self.num_ctx
 
                 payload = {
                     "model": self.model,

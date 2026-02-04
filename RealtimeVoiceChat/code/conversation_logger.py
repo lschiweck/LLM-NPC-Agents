@@ -368,15 +368,24 @@ class ConversationLogger:
         self,
         thinking: str,
         actions: List[Dict[str, str]],
-        processing_time_ms: Optional[float] = None
+        processing_time_ms: Optional[float] = None,
+        raw_response: Optional[str] = None
     ):
-        """Log a Game Manager tick."""
+        """Log a Game Manager tick with full details.
+        
+        Args:
+            thinking: The parsed THINKING section from the LLM
+            actions: List of parsed actions (each with 'target' and 'instruction')
+            processing_time_ms: How long the tick took
+            raw_response: The full raw LLM response (for debugging)
+        """
         if not self.enabled or not self.log_injections:
             return
             
         data = {
             "thinking": thinking,
-            "actions": actions
+            "actions": actions,
+            "raw_response": raw_response  # Full LLM output for debugging
         }
         
         if self.log_processing_times:

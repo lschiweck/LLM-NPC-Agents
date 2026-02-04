@@ -76,6 +76,9 @@ class GameManager:
         # Callback to broadcast state updates to UI
         self.on_state_update: Optional[Callable[[Dict], None]] = None
         
+        # Callback to log tick results (for conversation logger)
+        self.on_tick_complete: Optional[Callable[[str, str, List[Dict[str, str]], float], None]] = None
+        
         if self.state.enabled:
             self._rebuild_system_prompt()
             logger.info("🎮 Game Manager initialized (enabled)")
@@ -254,6 +257,9 @@ class GameManager:
         """
         thinking = ""
         actions = []
+        
+        # Get known characters for validation
+        known_characters = [c.lower() for c in self.config.get("known_characters", [])]
 
         def normalize_instruction(text: str) -> str:
             t = (text or "").strip()
@@ -262,13 +268,31 @@ class GameManager:
             # Remove parenthetical asides (GM prompt disallows them, but be robust)
             t = re.sub(r"\([^)]*\)", "", t).strip()
             # Strip common label-y prefixes if the model still emits them
-            # (Keep generic; no examples)
-            t = re.sub(r"^(?:OBSERVE|WATCHFUL|NOTE|NOTES|REMINDER|FOCUS)\b\s*[:\-–—]*\s*", "", t, flags=re.IGNORECASE)
+            t = re.sub(r"^(?:OBSERVE|WATCHFUL|NOTE|NOTES|REMINDER|FOCUS|ACTION)\b\s*[:\-–—]*\s*", "", t, flags=re.IGNORECASE)
+            # Remove any THINKING: leakage
+            t = re.sub(r"THINKING:.*", "", t, flags=re.IGNORECASE | re.DOTALL).strip()
+            # Remove "Inject X" / "Inject a" prefixes - the LLM sometimes writes these redundantly
+            t = re.sub(r"^Inject\s+(?:a\s+|an\s+|the\s+|some\s+)?(?:sense\s+of\s+|feeling\s+of\s+|hint\s+of\s+)?", "", t, flags=re.IGNORECASE).strip()
+            # Also remove standalone "Inject:" or "Inject -" at start
+            t = re.sub(r"^Inject\s*[:\-–—]\s*", "", t, flags=re.IGNORECASE).strip()
+            # Remove meta-commentary about injecting
+            t = re.sub(r"^(?:I will|I'm going to|Let me|This will)\s+inject.*?[.!]\s*", "", t, flags=re.IGNORECASE)
             # Normalize whitespace
             t = re.sub(r"\s+", " ", t).strip()
+            # Capitalize first letter if it's lowercase after our processing
+            if t and t[0].islower():
+                t = t[0].upper() + t[1:]
             # Drop instructions that explicitly say nothing should change
             if re.search(r"\bno\s+changes?\s+needed\b", t, re.IGNORECASE):
                 return ""
+            # Drop if too short (likely truncated/garbage)
+            if len(t) < 10:
+                return ""
+            # Drop if it looks like meta-commentary rather than a real instruction
+            if re.match(r"^(The |This |I |We |They )(conversation|detective|player|scene|story)", t, re.IGNORECASE):
+                # Could be meta - check if it's actually instructive
+                if not re.search(r"(feel|show|express|become|act|behave|react|mention|hint|reveal)", t, re.IGNORECASE):
+                    return ""
             return t
         
         # Extract THINKING
@@ -276,17 +300,38 @@ class GameManager:
         if thinking_match:
             thinking = thinking_match.group(1).strip()
         
-        # Extract INJECT actions
-        inject_pattern = r"INJECT\s+(\w+):\s*(.+?)(?=INJECT|ACTION:|$)"
+        # Check for NONE action first
+        if re.search(r"ACTION:\s*NONE", response, re.IGNORECASE):
+            return thinking, []
+        
+        # Extract INJECT actions - look for ACTION: INJECT pattern
+        # Pattern: ACTION: INJECT CharacterName: instruction text
+        inject_pattern = r"ACTION:\s*INJECT\s+(\w+):\s*(.+?)(?=ACTION:|INJECT\s+\w+:|$)"
         for match in re.finditer(inject_pattern, response, re.DOTALL | re.IGNORECASE):
             target = match.group(1).strip()
             instruction = normalize_instruction(match.group(2))
+            
+            # Validate target is a known character
+            if target.lower() not in known_characters:
+                logger.warning(f"🎮⚠️ Unknown injection target '{target}', skipping")
+                continue
+                
             if instruction and target:
                 actions.append({"target": target, "instruction": instruction})
+                logger.debug(f"🎮 Parsed injection for {target}: {instruction[:80]}...")
         
-        # Check for NONE action
-        if re.search(r"ACTION:\s*NONE", response, re.IGNORECASE):
-            actions = []  # Explicitly no actions
+        # Fallback: try simpler pattern if no actions found (INJECT without ACTION: prefix)
+        if not actions:
+            simple_pattern = r"INJECT\s+(\w+):\s*(.+?)(?=INJECT\s+\w+:|$)"
+            for match in re.finditer(simple_pattern, response, re.DOTALL | re.IGNORECASE):
+                target = match.group(1).strip()
+                instruction = normalize_instruction(match.group(2))
+                
+                if target.lower() not in known_characters:
+                    continue
+                    
+                if instruction and target:
+                    actions.append({"target": target, "instruction": instruction})
         
         return thinking, actions
     
@@ -367,6 +412,9 @@ class GameManager:
             
             logger.info(f"🎮📝 Game Manager response:\n{full_response}")
             
+            # Track timing for logging
+            tick_start_time = time.time()
+            
             # Parse response
             thinking, actions = self._parse_response(full_response)
             
@@ -379,7 +427,7 @@ class GameManager:
                 instruction = action["instruction"]
                 
                 if self.on_inject:
-                    logger.info(f"🎮💉 Injecting into {target}: {instruction[:50]}...")
+                    logger.info(f"🎮💉 Injecting into {target}: {instruction}")
                     self.on_inject(target, instruction)
                 else:
                     logger.warning(f"🎮⚠️ No inject callback set, cannot inject into {target}")
@@ -389,7 +437,16 @@ class GameManager:
                 "timestamp": time.time(),
                 "thinking": thinking,
                 "actions": actions,
+                "raw_response": full_response,  # Keep full response for debugging
             })
+            
+            # Fire tick complete callback for conversation logging
+            if self.on_tick_complete:
+                try:
+                    processing_time_ms = (time.time() - tick_start_time) * 1000
+                    self.on_tick_complete(full_response, thinking, actions, processing_time_ms)
+                except Exception as e:
+                    logger.warning(f"🎮⚠️ on_tick_complete callback failed: {e}")
             
             # Keep history bounded
             if len(self.state.history) > 100:
