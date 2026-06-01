@@ -3,14 +3,44 @@ __pycache__/
 *.py[cod]
 *$py.class
 *.pyc
+*.so
+build/
+dist/
+*.egg-info/
 
 # Conversation logs (local data)
 conversation_logs/
+RealtimeVoiceChat/code/conversation_logs/
 
 # Virtual environment
 venv/
 .venv/
 env/
+ENV/
+.python-version
+
+# Environment / secrets
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+secrets.*
+credentials.*
+
+# Private keys (defense in depth against accidental commits)
+test
+test.pub
+id_rsa
+id_rsa.pub
+id_ed25519
+id_ed25519.pub
+*.ppk
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
 
 # IDE
 .idea/
@@ -21,6 +51,7 @@ env/
 # OS
 .DS_Store
 Thumbs.db
+desktop.ini
 
 # Unity
 [Ll]ibrary/
@@ -30,6 +61,7 @@ Thumbs.db
 [Bb]uilds/
 [Ll]ogs/
 [Uu]ser[Ss]ettings/
+[Mm]emoryCaptures/
 *.csproj
 *.unityproj
 *.sln
@@ -44,3 +76,4 @@ Thumbs.db
 *.mdb
 *.opendb
 *.VC.db
+*.unitypackage
