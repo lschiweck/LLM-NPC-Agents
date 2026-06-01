@@ -1,0 +1,14 @@
+LLM-NPC-Agents
+Copyright (c) 2025 Lennart Schiweck, VR-Lab, Reutlingen University
+
+This project is a modified and extended version of "RealtimeVoiceChat" by
+Kolja Beigel (https://github.com/KoljaB/RealtimeVoiceChat), also distributed
+under the MIT License. Original portions remain Copyright (c) Kolja Beigel.
+
+Third-party components:
+  - Coqui TTS (XTTSv2)        — Coqui Public Model License
+  - RealtimeSTT / RealtimeTTS — MIT License
+  - Ollama models             — varies per model (e.g., Llama Community License)
+  - NativeWebSocket (Unity)   — MIT License
+
+Users are responsible for complying with the terms of each component they use.

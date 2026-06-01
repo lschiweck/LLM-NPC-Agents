@@ -19,14 +19,3 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
-
----
-
-This project is a modified and extended version of "RealtimeVoiceChat" by
-Kolja Beigel (https://github.com/KoljaB/RealtimeVoiceChat), which is also
-distributed under the MIT License. Original portions remain Copyright (c)
-Kolja Beigel.
-
-This project relies on third-party components (e.g., Coqui TTS, RealtimeSTT,
-RealtimeTTS, Ollama models) that are distributed under their own licenses.
-Users are responsible for complying with the terms of each component they use.
