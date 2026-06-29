@@ -251,6 +251,6 @@ Got ideas or found a bug? Contributions are welcome! Feel free to open issues or
 
 ## License 📜
 
-The core codebase of this project is released under the **MIT License** (see the [LICENSE](./LICENSE) file for details).
+The core codebase of this project is released under the **Apache License 2.0** (see the [LICENSE](../LICENSE) and [NOTICE](../NOTICE) files for details). Portions originating from the upstream [KoljaB/RealtimeVoiceChat](https://github.com/KoljaB/RealtimeVoiceChat) project remain Copyright (c) Kolja Beigel and were originally distributed under the MIT License.
 
 This project relies on external specific TTS engines (like `Coqui XTTSv2`) and LLM providers which have their **own licensing terms**. Please ensure you comply with the licenses of all components you use.

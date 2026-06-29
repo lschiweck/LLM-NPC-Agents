@@ -716,9 +716,10 @@ RealtimeVoice/
 
 ## License
 
-This project is under the MIT License. However, note the licenses of the components used:
+This project is licensed under the **Apache License 2.0** (see [LICENSE](./LICENSE) and [NOTICE](./NOTICE)). Note the licenses of the components used:
 - **Ollama Models**: Varies by model (e.g., Llama License)
 - **RealtimeSTT/TTS**: MIT
+- **Coqui TTS (XTTSv2)**: Coqui Public Model License
 
 ---
 
