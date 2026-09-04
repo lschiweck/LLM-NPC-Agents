@@ -21,6 +21,24 @@ The technical **core (audio streaming, STT, TTS, WebSocket structure)** is based
 
 ---
 
+## 📄 Research Publication
+
+This backend is the reference implementation of **Autonomous Inter-Agent Dialogue (AID)**, evaluated in the following paper:
+
+> **When NPCs Talk to Each Other: Autonomous Inter-Agent Dialogue in Voice-First VR**  
+> Lennart Schiweck and Gabriela Tullius  
+> *GI VR/AR Workshop 2026*, Gesellschaft für Informatik, Lecture Notes in Informatics (LNI). *To appear.*
+
+**What the paper adds.** AID lets co-present NPCs hold short, context-conditioned, **interruptible** exchanges and self-talk while the player is silent, so the scene does not feel suspended between turns. Autonomous turns are conditioned on recent player-facing dialogue and the player's coarse zone, player speech immediately cancels autonomous generation and playback, and a dialogue-steering module may inject a behavioural note without scripting utterances.
+
+**Evaluation.** A between-subjects exploratory VR study (*N* = 16) compared the full AID configuration against a player-initiated-only baseline in a detective scenario with two embodied agents. AID scored higher on a five-item, study-specific **scene-autonomy** index (*d* = 1.61, *p* = .018); no condition differences were detected for social presence, animacy, or anthropomorphism. The study ran fully locally on a single workstation (Llama 3.2 3B via Ollama, RTX 4070 Ti, Meta Quest 3 over Quest Link) with no external audio transmission.
+
+The paper also reports VR-specific design tensions this repository is useful for exploring: **audible vs. addressable** social space, **acoustic vs. semantic** floor control, generated intentions vs. **available affordances**, and autonomous speech vs. **static embodiment**.
+
+If you are looking for the mechanisms described in the paper, see [`npc_conversation.py`](./RealtimeVoiceChat/code/npc_conversation.py) (inter-agent orchestration), [`prompt_layers.py`](./RealtimeVoiceChat/code/prompt_layers.py) (layered system prompts), [`game_manager.py`](./RealtimeVoiceChat/code/game_manager.py) (dialogue steering), and [`NpcConversationController.cs`](./RealtimeVoiceChatUnity/Assets/Scripts/NpcConversationController.cs) (client-side scheduling).
+
+---
+
 ## What This Project Does
 
 This system provides the **AI backend for intelligent NPCs** that go beyond simple chatbots:
@@ -734,22 +752,25 @@ This project is licensed under the **Apache License 2.0** (see [LICENSE](./LICEN
 
 ## Citation
 
-If you use this project in academic work, publications, or research, please cite it as:
+If you use this project in academic work, publications, or research, please **cite the paper**:
 
-> **LLM-NPC-Agents: Real-Time Context-Aware AI Characters with Dynamic Story Orchestration**  
-> Lennart Schiweck  
-> VR-Lab, Reutlingen University, 2025
+> **When NPCs Talk to Each Other: Autonomous Inter-Agent Dialogue in Voice-First VR**  
+> Lennart Schiweck and Gabriela Tullius  
+> *GI VR/AR Workshop 2026*, Gesellschaft für Informatik, Lecture Notes in Informatics (LNI). *To appear.*
 
 ### BibTeX
 
 ```bibtex
-@software{schiweck2025llmnpcagents,
-  author       = {Schiweck, Lennart},
-  title        = {LLM-NPC-Agents: Real-Time Context-Aware AI Characters with Dynamic Story Orchestration},
-  year         = {2025},
-  institution  = {VR-Lab, Reutlingen University},
-  url          = {https://github.com/lschiweck/LLM-NPC-Agents},
-  note         = {WebSocket-based backend for intelligent NPCs with Game Manager orchestration. Includes Unity client reference implementation.}
+@inproceedings{schiweck2026aid,
+  author    = {Schiweck, Lennart and Tullius, Gabriela},
+  title     = {When {NPCs} Talk to Each Other: Autonomous Inter-Agent Dialogue
+               in Voice-First {VR}},
+  booktitle = {GI VR/AR Workshop 2026},
+  series    = {Lecture Notes in Informatics (LNI)},
+  publisher = {Gesellschaft f{\"u}r Informatik},
+  address   = {Bonn, Germany},
+  year      = {2026},
+  note      = {To appear}
 }
 ```
 
